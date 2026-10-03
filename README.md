@@ -17,8 +17,6 @@ PostgreSQL, MySQL & SQLite. Keyboard-first. Safe by default. Written in Rust.
 
 </div>
 
-<p align="center"><img src="docs/screenshots/main.png" alt="zdb results grid" width="800"></p>
-
 ---
 
 ## Why zdb?
