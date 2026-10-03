@@ -11,6 +11,10 @@ PostgreSQL & MySQL. Keyboard-first. Safe by default. Written in Rust.
 ![MySQL](https://img.shields.io/badge/MySQL-supported-4479A1?logo=mysql&logoColor=white)
 ![TUI](https://img.shields.io/badge/ratatui-powered-8A2BE2)
 
+<br><br>
+
+<img src="docs/screenshots/main.png" alt="zdb showing a SQL editor above a results grid" width="900">
+
 </div>
 
 ---
@@ -43,6 +47,19 @@ zdb postgres://…        # scratch connection (offers to save it when you quit)
 | 🚇 **SSH tunnels built in** | Uses your system `ssh`, so `~/.ssh/config`, `ProxyJump` and your agent just work. |
 | 🗂️ **Tabs, history & saved queries** | Stored locally in SQLite and shared between zdb instances. |
 | 🎨 **Themeable** | Customise colour roles with ANSI names, 0–255 or `#rrggbb`. |
+
+## 📸 A quick tour
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/prod.png" alt="Production environment: red banner and read-only"><br><sub><b>Production looks like production.</b> Red banner, read-only session.</sub></td>
+<td width="50%"><img src="docs/screenshots/sidebar.png" alt="Sidebar with tables"><br><sub><b>Browse your schema</b> from the sidebar (<code>^B</code>).</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/palette.png" alt="Fuzzy table picker"><br><sub><b>Fuzzy-jump to any table</b> with <code>^P</code>, or open the palette with <code>^K</code>.</sub></td>
+<td width="50%"><img src="docs/screenshots/whichkey.png" alt="Which-key menu"><br><sub><b>Can't remember a key?</b> Press <code>Space</code> and zdb shows you.</sub></td>
+</tr>
+</table>
 
 ## 🚀 Quick start
 
