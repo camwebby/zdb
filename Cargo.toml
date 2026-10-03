@@ -4,9 +4,15 @@ version = "0.1.0"
 edition = "2024"
 description = "A keyboard-first terminal UI database client for PostgreSQL, MySQL and SQLite"
 license = "MIT"
+repository = "https://github.com/camwebby/zdb"
+homepage = "https://github.com/camwebby/zdb"
 readme = "README.md"
 keywords = ["postgres", "mysql", "tui", "database", "sql"]
 categories = ["command-line-utilities", "database"]
+
+[features]
+# Keep development builds fast while making Linux release binaries self-contained.
+distribution = ["native-tls/vendored"]
 
 [dependencies]
 anyhow = "1.0.104"
@@ -33,3 +39,7 @@ url = "2.5.8"
 
 [dev-dependencies]
 insta = "1.49.0"
+
+[profile.dist]
+inherits = "release"
+lto = "thin"

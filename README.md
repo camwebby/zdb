@@ -67,15 +67,44 @@ zdb sqlite://:memory:    # temporary in-memory database
 ## 🚀 Quick start
 
 ```bash
-# Build from source (requires a recent Rust toolchain)
-git clone https://github.com/camwebby/zdb.git
-cd zdb
-cargo install --path .
+brew install camwebby/tap/zdb
+zdb postgres://app@localhost:5432/shop
 ```
 
-> **Platforms:** developed and tested on macOS. Linux is built and tested in CI; Windows is untested.
+No Rust toolchain required. Enter your password when prompted. zdb offers to save the connection when you quit.
 
-Add a project to `~/.config/zdb/connections.toml`:
+For a local SQLite database:
+
+```bash
+zdb sqlite:///absolute/path/shop.db
+```
+
+**Without Homebrew (macOS or Linux):**
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/camwebby/zdb/releases/latest/download/zdb-installer.sh | sh
+```
+
+Follow the installer's PATH instructions, then run `zdb` with your connection URL. You can also download a binary from [GitHub Releases](https://github.com/camwebby/zdb/releases).
+
+> Builds cover Apple Silicon and Intel Macs, and x86-64 Linux (glibc 2.35 or newer, such as Ubuntu 22.04+). Windows is untested.
+
+To update, run `brew upgrade camwebby/tap/zdb`, or rerun the shell installer.
+
+<details>
+<summary>Build from source (requires a recent Rust toolchain)</summary>
+
+```bash
+git clone https://github.com/camwebby/zdb.git
+cd zdb
+cargo install --locked --path .
+```
+
+</details>
+
+## Team configuration
+
+For named projects and environments, add a project to `~/.config/zdb/connections.toml`:
 
 ```toml
 [[project]]

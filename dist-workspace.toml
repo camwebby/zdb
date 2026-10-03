@@ -1,0 +1,18 @@
+[workspace]
+members = ["cargo:."]
+
+[dist]
+cargo-dist-version = "0.33.0"
+ci = ["github"]
+installers = ["shell", "homebrew"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
+install-path = "~/.local/bin"
+tap = "camwebby/homebrew-tap"
+publish-jobs = ["homebrew"]
+pr-run-mode = "plan"
+# Bundle OpenSSL on Linux so users don't need to install a matching system library.
+features = ["distribution"]
+
+[dist.github-custom-runners]
+x86_64-apple-darwin = "macos-15-intel"
+x86_64-unknown-linux-gnu = "ubuntu-22.04"

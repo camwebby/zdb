@@ -23,4 +23,6 @@ are set. See the Development section of the [README](README.md) for Docker comma
 
 ## Platforms
 
+Maintainers: see [Releasing zdb](docs/releasing.md) for binary releases and Homebrew publishing.
+
 zdb is developed and tested on macOS. Linux is built in CI; Windows is untested. Reports and fixes welcome.
