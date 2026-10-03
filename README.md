@@ -1,61 +1,59 @@
-# zdb
+<div align="center">
 
-A calm, fast terminal UI for PostgreSQL and MySQL, built on ratatui and crossterm.
+# ⚡ zdb
 
+### The calm, blazing-fast database client that lives in your terminal.
+
+PostgreSQL & MySQL. Keyboard-first. Safe by default. Written in Rust.
+
+![Rust](https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-supported-336791?logo=postgresql&logoColor=white)
+![MySQL](https://img.shields.io/badge/MySQL-supported-4479A1?logo=mysql&logoColor=white)
+![TUI](https://img.shields.io/badge/ratatui-powered-8A2BE2)
+
+</div>
+
+---
+
+## Why zdb?
+
+You don't need a 500 MB GUI to look at a table. You need something that opens instantly, stays out of your way, and **won't let you wreck production**.
+
+`zdb` gives you a full SQL workbench inside your terminal, with an editor, a results grid, schema browsing, inline editing and an EXPLAIN viewer. It's all driven from the keyboard, and it works over SSH.
+
+```bash
+zdb                     # reopen the last project
+zdb shop                # open a project (last environment, or the first non-prod one)
+zdb shop:prod           # open a project on a specific environment
+zdb postgres://…        # scratch connection (offers to save it when you quit)
 ```
-zdb                     reopen the last project
-zdb shop                open a project (its last environment, or the first non-prod one)
-zdb shop:prod           open a project on a specific environment
-zdb postgres://…        scratch connection (offers to save it when you quit)
+
+## ✨ Highlights
+
+| | |
+|---|---|
+| 🐘🐬 **Postgres & MySQL** | One interface for both, with TLS support. |
+| 🛡️ **Production-safe** | `prod`, `prd` and `live` environments open **read-only**, enforced on the server session. Destructive statements ask first. |
+| ⌨️ **Keyboard-first** | A command palette (`^K`), a which-key menu on `Space`, vim-style navigation, and a fully remappable keymap. |
+| 🧮 **Powerful results grid** | Server-side sorting, filter chips, find, multi-select, and follow foreign keys with `gd`. |
+| ✏️ **Edit cells in place** | Stage edits, review them, and commit in **one transaction**. zdb refuses to commit if a row changed underneath you. |
+| 📋 **Copy anything** | Values, CSV, JSON, Markdown, `INSERT` statements, column names or `IN (…)` lists, each a keystroke away. |
+| 🌳 **EXPLAIN tree view** | Query plans as a readable tree, with per-node cost and time. |
+| 🔐 **Secrets done right** | Passwords never touch your config. Use the OS keychain, `env:VAR`, `~/.pgpass`, `~/.my.cnf` or a prompt. |
+| 🚇 **SSH tunnels built in** | Uses your system `ssh`, so `~/.ssh/config`, `ProxyJump` and your agent just work. |
+| 🗂️ **Tabs, history & saved queries** | Stored locally in SQLite and shared between zdb instances. |
+| 🎨 **Themeable** | Customise colour roles with ANSI names, 0–255 or `#rrggbb`. |
+
+## 🚀 Quick start
+
+```bash
+# Build from source (requires a recent Rust toolchain)
+git clone <your-repo-url> zdb
+cd zdb
+cargo install --path .
 ```
 
-## Layout
-
-Four bands: a top line (project · environment, red on production), the SQL editor, the
-results, and a status line (focus, stats, hints, messages). A sidebar (`^B`) lists tables
-and saved queries; the inspector (`⏎` on a row) shows one row in full.
-
-## Keys
-
-Global: `^K` palette (`@` connections, `#` tables, `>` commands, `/` saved, `!` history) ·
-`^P` go to table · `^E` switch environment · `^R`/`^⏎` run statement (or selection) ·
-`M-r` run all · `^C` cancel the running query (never quits) · `^T`/`^W` new/close tab ·
-`M-1…9` (Option+1…9) jump to tab · `^N` next tab (`t`/`T` in results) · `^J` editor ⇄ results (`Esc` leaves the editor, `Tab` cycles panes) · `^S` save query / review staged edits · `^Q` quit · `^X ^E` edit in `$EDITOR`.
-
-Results: `hjkl`/arrows · `g`/`G` · `s`/`S` sort (server-side when the result was capped) ·
-`v`/`V`/`M-v` select · `⇧`+arrows extend · `⇧Space` select row · `^A` select all · `y` copy menu (`yy` values, `yc` CSV, `yC` CSV without headers, `yj`
-JSON, `ym` Markdown, `yi` INSERT, `yn` names, `yw` IN list) · `/` `n` `N` find · `L` load all ·
-`f`/`F` filter chips · `e` edit cell · `u` undo edit · `gd` follow foreign key · `[` `]` results.
-
-`Space` opens a which-key menu after 300 ms (`r` run, `y` copy, `c` connection, `t` table,
-`v` view, `x` export, `h` history, `q` saved, `f` format). `?` shows help for the current pane.
-
-In the editor `^A`/`^E` (what Cmd+←/→ sends on macOS) are line start/end; switch environment
-with `^E` from the results or `^K`.
-
-## Safety
-
-- Production environments (named `prod*`, `prd` or `live`, or with `level = "prod"`) open read-only; the
-  session itself is read-only on the server. `Space c w` allows writes until you quit or
-  stay idle for 30 minutes.
-- UPDATE/DELETE without WHERE, DROP and TRUNCATE ask for confirmation; on production you type
-  the environment name.
-- Staged cell edits run in one transaction after a review screen (`^S`), and refuse to commit
-  if a row changed underneath.
-
-## Configuration
-
-`$XDG_CONFIG_HOME/zdb` (or `~/.config/zdb`, override with `ZDB_CONFIG_DIR`):
-
-- `connections.toml` — projects and environments. Safe to commit: passwords come from the OS
-  keychain (default), `env:VAR`, `pgpass`, `mycnf`, `prompt` or `none`.
-- `config.toml` — row limit, Space menu delay, vim mode, density, ascii, mouse, …
-- `keymap.toml` — `[global]` and `[pane]` tables of `action = "key"`. `^K > settings: open
-  keymap` writes a commented template listing every action, then opens it in `$EDITOR`;
-  changes apply when the editor closes.
-- `theme.toml` — colour roles (ANSI names, 0–255 or `#rrggbb`).
-
-History, workspaces and saved queries live in `$XDG_DATA_HOME/zdb/zdb.db` (`ZDB_DATA_DIR`).
+Add a project to `~/.config/zdb/connections.toml`:
 
 ```toml
 [[project]]
@@ -71,22 +69,118 @@ url = "postgres://app@db.internal/shop?sslmode=require"
 ssh = "me@bastion.example.com"
 ```
 
-## Development
+Then run `zdb shop` (or `zdb shop:prod`). `connections.toml` contains no secrets, so it's safe to commit and share with your team.
 
-```
-cargo test                                  # unit + render tests
+## 🖥️ Layout
+
+Four bands, nothing more:
+
+1. **Top line:** project · environment (turns red on production)
+2. **SQL editor**
+3. **Results grid**
+4. **Status line:** focus, stats, hints and messages
+
+Press `^B` for a sidebar of tables and saved queries. Press `⏎` on a row to open the inspector and see it in full.
+
+## 🛡️ Safety, built in
+
+- **Production opens read-only.** Environments named `prod*`, `prd` or `live`, or with `level = "prod"`, are read-only on the server session. `Space c w` unlocks writes until you quit or go idle for 30 minutes.
+- **Guard rails on dangerous SQL.** `UPDATE`/`DELETE` without `WHERE`, `DROP` and `TRUNCATE` all ask for confirmation. On production you must **type the environment name**.
+- **Transactional edits.** Staged cell edits are reviewed (`^S`), committed atomically, and aborted if the underlying row has changed.
+
+## ⌨️ Keys at a glance
+
+<details open>
+<summary><b>Global</b></summary>
+
+| Key | Action |
+|---|---|
+| `^K` | Command palette: `@` connections · `#` tables · `>` commands · `/` saved · `!` history |
+| `^P` | Go to table |
+| `^E` | Switch environment |
+| `^R` / `^⏎` | Run statement (or selection) |
+| `M-r` | Run all |
+| `^C` | Cancel the running query (never quits) |
+| `^T` / `^W` | New / close tab |
+| `M-1…9` | Jump to tab (Option+1…9) |
+| `^N` | Next tab (`t`/`T` in results) |
+| `^J` | Editor ⇄ results (`Esc` leaves the editor, `Tab` cycles panes) |
+| `^S` | Save query / review staged edits |
+| `^X ^E` | Edit in `$EDITOR` |
+| `^Q` | Quit |
+
+</details>
+
+<details>
+<summary><b>Results grid</b></summary>
+
+| Key | Action |
+|---|---|
+| `hjkl` / arrows, `g` / `G` | Navigate |
+| `s` / `S` | Sort (server-side when the result was capped) |
+| `v` / `V` / `M-v`, `⇧`+arrows, `⇧Space`, `^A` | Select cells, rows, or everything |
+| `y` | Copy menu: `yy` values · `yc` CSV · `yC` CSV without headers · `yj` JSON · `ym` Markdown · `yi` INSERT · `yn` names · `yw` IN list |
+| `/` `n` `N` | Find |
+| `L` | Load all rows |
+| `f` / `F` | Filter chips |
+| `e` / `u` | Edit cell / undo edit |
+| `gd` | Follow foreign key |
+| `[` `]` | Previous / next result |
+
+</details>
+
+> 💡 **Lost?** Press `Space` and wait 300 ms for the which-key menu (`r` run, `y` copy, `c` connection, `t` table, `v` view, `x` export, `h` history, `q` saved, `f` format). Press `?` for help on the current pane.
+
+In the editor, `^A`/`^E` (what Cmd+←/→ sends on macOS) jump to line start and end. Use `^E` from the results, or `^K`, to switch environment.
+
+## ⚙️ Configuration
+
+Lives in `$XDG_CONFIG_HOME/zdb` (or `~/.config/zdb`; override with `ZDB_CONFIG_DIR`).
+
+| File | Purpose |
+|---|---|
+| `connections.toml` | Projects and environments. Secrets come from the keychain (default), `env:VAR`, `pgpass`, `mycnf`, `prompt` or `none`. |
+| `config.toml` | Row limit, Space menu delay, vim mode, density, ASCII mode, mouse, and more. |
+| `keymap.toml` | Remap anything with `action = "key"` in `[global]` and `[pane]` tables. Run `^K > settings: open keymap` for a commented template. Changes apply when the editor closes. |
+| `theme.toml` | Colour roles: ANSI names, 0–255 or `#rrggbb`. |
+
+History, workspaces and saved queries are stored in `$XDG_DATA_HOME/zdb/zdb.db` (override with `ZDB_DATA_DIR`).
+
+## 🧪 Development
+
+```bash
+cargo test                                   # unit + render tests
+
 ZDB_TEST_PG=postgres://app:secret@localhost:55432/shop \
 ZDB_TEST_MYSQL=mysql://app:secret@localhost:53306/shop \
-cargo test it_                              # drives the whole app against live servers
+cargo test it_                               # drives the whole app against live servers
 ```
 
-Test servers:
+Spin up the test databases:
 
-```
+```bash
 docker run -d --name zdb-pg -e POSTGRES_PASSWORD=secret -e POSTGRES_USER=app -e POSTGRES_DB=shop -p 55432:5432 postgres:17-alpine
 docker run -d --name zdb-my -e MYSQL_ROOT_PASSWORD=secret -e MYSQL_DATABASE=shop -e MYSQL_USER=app -e MYSQL_PASSWORD=secret -p 53306:3306 mysql:8.4
 ```
 
-Source map: `sql.rs` (tokenizer, splitting, classification) · `db/` (drivers, schema) ·
-`grid.rs`/`copy.rs`/`editor.rs` (models) · `app/` (state, actions, jobs, overlays) ·
-`ui/` (rendering) · `keys.rs` (commands, keymap, Space menu).
+<details>
+<summary><b>Source map</b></summary>
+
+- `sql.rs`: tokenizer, statement splitting, classification
+- `db/`: drivers, schema, SSH tunnels
+- `grid.rs` / `copy.rs` / `editor.rs`: models
+- `app/`: state, actions, jobs, overlays
+- `ui/`: rendering
+- `keys.rs`: commands, keymap, Space menu
+
+</details>
+
+---
+
+<div align="center">
+
+**Open a terminal. Run `zdb`. Query with confidence.**
+
+Built with 🦀 [ratatui](https://ratatui.rs), [crossterm](https://github.com/crossterm-rs/crossterm) and [tokio](https://tokio.rs).
+
+</div>
