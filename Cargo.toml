@@ -1,0 +1,30 @@
+[package]
+name = "zdb"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+arboard = "3.6.1"
+base64 = "0.23.1"
+crossterm = { version = "0.29", features = ["event-stream"] }
+dirs = "7.0.0"
+futures = "0.3.34"
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+mysql_async = { version = "0.37.1", features = ["native-tls-tls"] }
+native-tls = "0.2.18"
+nucleo-matcher = "0.3.1"
+postgres-native-tls = "0.5.3"
+ratatui = "0.30.2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+shell-words = "1.1.1"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "sync", "time", "net", "process", "fs", "io-util"] }
+tokio-postgres = { version = "0.7.18", features = ["with-serde_json-1"] }
+toml = "1.1.6"
+unicode-width = "0.2.2"
+url = "2.5.8"
+
+[dev-dependencies]
+insta = "1.49.0"
