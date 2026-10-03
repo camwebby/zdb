@@ -990,9 +990,10 @@ impl ConnForm {
     }
 
     pub fn visible(&self) -> Vec<usize> {
-        let mut v = vec![URL, HOST, PORT, USER, PASSWORD, DATABASE, PROJECT, ENV, ADVANCED];
+        let sqlite = self.fields[URL].text.trim().starts_with("sqlite://");
+        let mut v = if sqlite { vec![URL, DATABASE, PROJECT, ENV, ADVANCED] } else { vec![URL, HOST, PORT, USER, PASSWORD, DATABASE, PROJECT, ENV, ADVANCED] };
         if self.advanced {
-            v.extend([SSL, SSH, PWSRC, READONLY]);
+            if sqlite { v.push(READONLY); } else { v.extend([SSL, SSH, PWSRC, READONLY]); }
         }
         v.extend([TEST, SAVE]);
         v

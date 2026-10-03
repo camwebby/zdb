@@ -57,6 +57,7 @@ impl Level {
 pub enum DriverKind {
     Postgres,
     Mysql,
+    Sqlite,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,10 +198,14 @@ pub struct UrlParts {
 
 impl UrlParts {
     pub fn parse(s: &str) -> Result<UrlParts> {
+        if let Some(path) = s.trim().strip_prefix("sqlite://") {
+            if path.is_empty() { bail!("SQLite URL needs a file path or :memory:"); }
+            return Ok(UrlParts { scheme: "sqlite".into(), database: pct_decode(path), ..Default::default() });
+        }
         let u = url::Url::parse(s.trim()).map_err(|e| anyhow!("invalid URL: {e}"))?;
         let scheme = u.scheme().to_string();
         if driver_for_scheme(&scheme).is_none() {
-            bail!("unsupported scheme {scheme}:// (use postgres:// or mysql://)");
+            bail!("unsupported scheme {scheme}:// (use postgres://, mysql:// or sqlite://)");
         }
         Ok(UrlParts {
             scheme,
@@ -214,6 +219,9 @@ impl UrlParts {
     }
     /// Rebuild the URL, never including the password.
     pub fn build(&self) -> String {
+        if self.driver() == Some(DriverKind::Sqlite) {
+            return format!("sqlite://{}", self.database.split('/').map(pct_encode).collect::<Vec<_>>().join("/"));
+        }
         let scheme = if self.scheme.is_empty() { "postgres" } else { &self.scheme };
         let mut s = format!("{scheme}://");
         if !self.user.is_empty() {
@@ -263,6 +271,7 @@ pub fn driver_for_scheme(s: &str) -> Option<DriverKind> {
     match s {
         "postgres" | "postgresql" | "pg" => Some(DriverKind::Postgres),
         "mysql" | "mariadb" => Some(DriverKind::Mysql),
+        "sqlite" => Some(DriverKind::Sqlite),
         _ => None,
     }
 }

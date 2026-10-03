@@ -4,6 +4,7 @@
 pub mod mysql;
 pub mod pg;
 pub mod schema;
+pub mod sqlite;
 pub mod tunnel;
 
 use crate::config::{DriverKind, UrlParts};
@@ -89,6 +90,7 @@ pub struct ConnectParams {
 pub enum Session {
     Pg(pg::PgSession),
     My(mysql::MySession),
+    Sqlite(sqlite::SqliteSession),
 }
 
 #[derive(Clone)]
@@ -96,6 +98,7 @@ pub enum Session {
 pub enum Canceller {
     Pg(pg::PgCancel),
     My(mysql::MyCancel),
+    Sqlite(sqlite::SqliteCancel),
 }
 
 impl Canceller {
@@ -103,6 +106,7 @@ impl Canceller {
         match self {
             Canceller::Pg(c) => c.cancel().await,
             Canceller::My(c) => c.cancel().await,
+            Canceller::Sqlite(c) => { c.interrupt(); Ok(()) },
         }
     }
 }
@@ -111,6 +115,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 impl Session {
     pub async fn connect(p: &ConnectParams) -> Result<Session, DbError> {
+        if p.driver == DriverKind::Sqlite {
+            if p.ssh.as_ref().is_some_and(|s| !s.trim().is_empty()) { return Err(DbError::msg("SQLite does not support SSH tunnels")); }
+            let mut s = Session::Sqlite(sqlite::SqliteSession::connect(p).await?);
+            if p.read_only { s.set_read_only(true).await?; }
+            return Ok(s);
+        }
         let tunnel = match &p.ssh {
             Some(target) if !target.trim().is_empty() => {
                 let host = if p.parts.host.is_empty() { "localhost".to_string() } else { p.parts.host.clone() };
@@ -122,6 +132,7 @@ impl Session {
             match p.driver {
                 DriverKind::Postgres => pg::PgSession::connect(p, tunnel).await.map(Session::Pg),
                 DriverKind::Mysql => mysql::MySession::connect(p, tunnel).await.map(Session::My),
+                DriverKind::Sqlite => unreachable!(),
             }
         };
         let mut s = tokio::time::timeout(CONNECT_TIMEOUT, fut)
@@ -137,6 +148,7 @@ impl Session {
         match self {
             Session::Pg(_) => DriverKind::Postgres,
             Session::My(_) => DriverKind::Mysql,
+            Session::Sqlite(_) => DriverKind::Sqlite,
         }
     }
 
@@ -144,6 +156,7 @@ impl Session {
         match self {
             Session::Pg(s) => &s.version,
             Session::My(s) => &s.version,
+            Session::Sqlite(s) => &s.version,
         }
     }
 
@@ -151,6 +164,7 @@ impl Session {
         match self {
             Session::Pg(s) => Canceller::Pg(s.canceller()),
             Session::My(s) => Canceller::My(s.canceller()),
+            Session::Sqlite(s) => Canceller::Sqlite(s.canceller()),
         }
     }
 
@@ -158,6 +172,7 @@ impl Session {
         match self {
             Session::Pg(s) => s.run(sql, sink).await,
             Session::My(s) => s.run(sql, sink).await,
+            Session::Sqlite(s) => s.run(sql, sink).await,
         }
     }
 
@@ -174,6 +189,8 @@ impl Session {
             (DriverKind::Postgres, false) => "set session characteristics as transaction read write",
             (DriverKind::Mysql, true) => "set session transaction read only",
             (DriverKind::Mysql, false) => "set session transaction read write",
+            (DriverKind::Sqlite, true) => "pragma query_only = on",
+            (DriverKind::Sqlite, false) => "pragma query_only = off",
         };
         self.rows(sql).await.map(|_| ())
     }
@@ -182,6 +199,7 @@ impl Session {
         match self {
             Session::Pg(s) => s.is_closed(),
             Session::My(_) => false,
+            Session::Sqlite(_) => false,
         }
     }
 }
@@ -215,7 +233,7 @@ pub fn quote_ident(d: DriverKind, name: &str) -> String {
         return name.to_string();
     }
     match d {
-        DriverKind::Postgres => format!("\"{}\"", name.replace('"', "\"\"")),
+        DriverKind::Postgres | DriverKind::Sqlite => format!("\"{}\"", name.replace('"', "\"\"")),
         DriverKind::Mysql => format!("`{}`", name.replace('`', "``")),
     }
 }
@@ -228,11 +246,15 @@ pub fn quote_qualified(d: DriverKind, schema: &str, name: &str) -> String {
 /// Literal for a cell value of the given kind, for generated UPDATE/INSERT statements.
 pub fn literal(d: DriverKind, kind: ColKind, v: Option<&str>) -> String {
     let Some(v) = v else { return "NULL".into() };
+    if d == DriverKind::Sqlite && kind == ColKind::Bytes
+        && let Some(hex) = v.strip_prefix("0x").filter(|h| h.len() % 2 == 0 && h.bytes().all(|c| c.is_ascii_hexdigit())) {
+            return format!("X'{hex}'");
+        }
     match kind {
         ColKind::Int | ColKind::Float | ColKind::Decimal if v.parse::<f64>().is_ok() => v.to_string(),
         ColKind::Bool if matches!(v, "true" | "false") => v.to_string(),
         _ => match d {
-            DriverKind::Postgres => crate::sql::quote_literal(v),
+            DriverKind::Postgres | DriverKind::Sqlite => crate::sql::quote_literal(v),
             DriverKind::Mysql => format!("'{}'", v.replace('\\', "\\\\").replace('\'', "''")),
         },
     }

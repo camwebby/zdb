@@ -1,4 +1,4 @@
-//! zdb — a calm, fast terminal UI for PostgreSQL and MySQL.
+//! zdb — a calm, fast terminal UI for PostgreSQL, MySQL and SQLite.
 
 mod app;
 mod config;
@@ -27,7 +27,7 @@ use futures::StreamExt;
 use std::io::stdout;
 use std::time::Duration;
 
-const USAGE: &str = "zdb — terminal UI for PostgreSQL and MySQL
+const USAGE: &str = "zdb — terminal UI for PostgreSQL, MySQL and SQLite
 
 usage:
   zdb                     reopen the last project
@@ -69,7 +69,7 @@ async fn main() -> Result<()> {
     match args.first() {
         Some(a) if a.contains("://") => {
             if config::UrlParts::parse(a).ok().and_then(|p| p.driver()).is_none() {
-                anyhow::bail!("unsupported URL scheme in {a} (use postgres:// or mysql://)");
+                anyhow::bail!("unsupported URL scheme in {a} (use postgres://, mysql:// or sqlite://)");
             }
             let (p, e) = app.conns.add_scratch(a);
             app.scratch_unsaved = true;

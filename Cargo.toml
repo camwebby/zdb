@@ -2,7 +2,7 @@
 name = "zdb"
 version = "0.1.0"
 edition = "2024"
-description = "A keyboard-first terminal UI database client for PostgreSQL and MySQL"
+description = "A keyboard-first terminal UI database client for PostgreSQL, MySQL and SQLite"
 license = "MIT"
 readme = "README.md"
 keywords = ["postgres", "mysql", "tui", "database", "sql"]
@@ -21,7 +21,7 @@ native-tls = "0.2.18"
 nucleo-matcher = "0.3.1"
 postgres-native-tls = "0.5.3"
 ratatui = "0.30.2"
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "column_decltype"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 shell-words = "1.1.1"

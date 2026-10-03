@@ -91,6 +91,12 @@ pub async fn load(sess: &mut Session) -> Result<Schema, DbError> {
              join pg_attribute fa on fa.attrelid = fc.oid and fa.attnum = u.a2
              where k.contype = 'f' and array_length(k.conkey, 1) = 1",
         ),
+        DriverKind::Sqlite => (
+            "select '', name, type, null from sqlite_schema where type in ('table','view') and name not like 'sqlite_%' order by name",
+            "select '', s.name, p.name, p.type, case when p.[notnull] = 0 then 'true' else 'false' end from sqlite_schema s, pragma_table_xinfo(s.name) p where s.type in ('table','view') and s.name not like 'sqlite_%' and p.hidden != 1 order by s.name, p.cid",
+            "select '', s.name, p.name from sqlite_schema s, pragma_table_info(s.name) p where s.type = 'table' and p.pk > 0",
+            "select '', s.name, f.[from], '', f.[table], coalesce(f.[to], (select name from pragma_table_info(f.[table]) where pk = f.seq + 1)) from sqlite_schema s, pragma_foreign_key_list(s.name) f where s.type = 'table' and (select count(*) from pragma_foreign_key_list(s.name) ff where ff.id = f.id) = 1",
+        ),
         DriverKind::Mysql => (
             "select '', table_name, table_type, cast(table_rows as signed) from information_schema.tables
              where table_schema = database() order by table_name",
@@ -106,7 +112,7 @@ pub async fn load(sess: &mut Session) -> Result<Schema, DbError> {
     let disp = |sch: &str, name: &str| if sch.is_empty() { name.to_string() } else { format!("{sch}.{name}") };
     for r in sess.rows(tables_q).await? {
         let kind = match s(&r[2]).as_str() {
-            "v" | "m" | "VIEW" | "SYSTEM VIEW" => TableKind::View,
+            "view" | "v" | "m" | "VIEW" | "SYSTEM VIEW" => TableKind::View,
             _ => TableKind::Table,
         };
         let est = r[3].as_ref().and_then(|v| v.parse::<i64>().ok()).filter(|n| *n >= 0);
@@ -179,6 +185,17 @@ pub async fn structure(sess: &mut Session, t: &TableInfo, cols: &[ColInfo]) -> R
                 out
             };
             Ok(Structure { indexes: idx.iter().map(|r| (s(&r[0]), s(&r[1]))).collect(), foreign_keys: fks, create })
+        }
+        DriverKind::Sqlite => {
+            let lit = crate::sql::quote_literal(&t.name);
+            let idx = sess.rows(&format!("select name, coalesce(sql, 'automatic index') from sqlite_schema where type = 'index' and tbl_name = {lit} order by name")).await?;
+            let create = sess.rows(&format!("select sql from sqlite_schema where name = {lit} and type in ('table','view')")).await?;
+            let fks = sess.rows(&format!("select id, seq, [from], [table], [to], on_update, on_delete from pragma_foreign_key_list({lit}) order by id, seq")).await?;
+            Ok(Structure {
+                indexes: idx.iter().map(|r| (s(&r[0]), s(&r[1]))).collect(),
+                foreign_keys: fks.iter().map(|r| (format!("fk_{}_{}", s(&r[0]), s(&r[1])), format!("({}) references {}({}) on update {} on delete {}", s(&r[2]), s(&r[3]), s(&r[4]), s(&r[5]), s(&r[6])))).collect(),
+                create: create.first().map(|r| s(&r[0])).unwrap_or_default(),
+            })
         }
         DriverKind::Mysql => {
             let idx = sess.rows(&format!("show index from {q}")).await?;

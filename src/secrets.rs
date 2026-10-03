@@ -35,6 +35,7 @@ pub fn keychain_delete(project: &str, env: &str) {
 }
 
 pub fn lookup(project: &str, env: &EnvConfig, parts: &UrlParts) -> Lookup {
+    if parts.driver() == Some(crate::config::DriverKind::Sqlite) { return Lookup::NotNeeded; }
     if !parts.password.is_empty() {
         return Lookup::Found(parts.password.clone());
     }

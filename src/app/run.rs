@@ -191,6 +191,10 @@ impl App {
     fn dispatch_statements(&mut self, stmts: Vec<(String, String, usize)>, purpose: Purpose) {
         let cap = self.row_cap();
         let driver = self.driver();
+        if driver == DriverKind::Sqlite && matches!(purpose, Purpose::Explain { analyze: true }) {
+            self.toast_err("SQLite does not support EXPLAIN ANALYZE · use EXPLAIN");
+            return;
+        }
         let job: Vec<JobStmt> = stmts
             .into_iter()
             .map(|(exec, orig, off)| {
@@ -785,12 +789,16 @@ fn explain_sql(d: DriverKind, stmt: &str, analyze: bool) -> String {
     match (d, analyze) {
         (DriverKind::Postgres, false) => format!("explain (format json) {s}"),
         (DriverKind::Postgres, true) => format!("explain (analyze, format json) {s}"),
+        (DriverKind::Sqlite, _) => format!("explain query plan {s}"),
         (DriverKind::Mysql, false) => format!("explain format=tree {s}"),
         (DriverKind::Mysql, true) => format!("explain analyze {s}"),
     }
 }
 
 fn explain_body(rs: &ResultSet, analyze: bool) -> ResultBody {
+    if rs.cols.len() == 4 && rs.cols[0].name == "id" && rs.cols[1].name == "parent" && rs.cols[3].name == "detail" {
+        return ResultBody::Text((0..rs.rows).filter_map(|r| rs.get(r, 3).map(String::from)).collect());
+    }
     let text: Vec<&str> = (0..rs.rows).filter_map(|r| rs.get(r, 0)).collect();
     let joined = text.join("\n");
     if joined.trim_start().starts_with('[') {

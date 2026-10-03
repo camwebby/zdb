@@ -4,7 +4,7 @@
 
 ### The calm, fast database client that lives in your terminal.
 
-PostgreSQL & MySQL. Keyboard-first. Safe by default. Written in Rust.
+PostgreSQL, MySQL & SQLite. Keyboard-first. Safe by default. Written in Rust.
 
 ![Rust](https://img.shields.io/badge/built%20with-Rust-dea584?logo=rust&logoColor=white)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-supported-336791?logo=postgresql&logoColor=white)
@@ -32,13 +32,16 @@ zdb                     # reopen the last project
 zdb shop                # open a project (last environment, or the first non-prod one)
 zdb shop:prod           # open a project on a specific environment
 zdb postgres://…        # scratch connection (offers to save it when you quit)
+zdb sqlite:///absolute/path/shop.db
+zdb sqlite://relative/path/shop.db
+zdb sqlite://:memory:    # temporary in-memory database
 ```
 
 ## ✨ Highlights
 
 | | |
 |---|---|
-| 🐘🐬 **Postgres & MySQL** | One interface for both, with TLS support. |
+| 🐘🐬 **Postgres, MySQL & SQLite** | One interface for servers and local files, with TLS for server connections. |
 | 🛡️ **Production-safe** | `prod`, `prd` and `live` environments open **read-only**, enforced on the server session. Destructive statements ask first. |
 | ⌨️ **Keyboard-first** | A command palette (`^K`), a which-key menu on `Space`, vim-style navigation, and a fully remappable keymap. |
 | 🧮 **Powerful results grid** | Server-side sorting, filter chips, find, multi-select, and follow foreign keys with `gd`. |
@@ -91,6 +94,8 @@ ssh = "me@bastion.example.com"
 ```
 
 Then run `zdb shop` (or `zdb shop:prod`). `connections.toml` contains no secrets, so it's safe to commit and share with your team.
+
+SQLite URLs also work in `connections.toml`. Files must already exist; relative paths resolve from the directory where you launch zdb. SQLite connections need no password or SSH tunnel. Production environments use SQLite's `query_only` mode until writes are unlocked. Schema browsing, foreign keys, transactional cell edits and `EXPLAIN QUERY PLAN` are supported; SQLite has no `EXPLAIN ANALYZE`.
 
 ## 🖥️ Layout
 
