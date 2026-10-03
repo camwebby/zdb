@@ -1,5 +1,6 @@
 /target
-.screenshots/data/
-.screenshots/out/
-.screenshots/html/
-.screenshots/cfg/
+/.screenshots/venv/
+/.screenshots/data/
+/.screenshots/out/
+/.screenshots/html/
+/.screenshots/cfg/

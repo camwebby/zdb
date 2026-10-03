@@ -53,6 +53,8 @@ impl MySession {
             .prefer_socket(false);
         let mode = parts.param("ssl-mode").or_else(|| parts.param("sslmode")).unwrap_or_default().to_ascii_lowercase();
         match mode.as_str() {
+            // Intentional: like libpq `require`, encrypt without verifying the certificate.
+            // Use verify-ca / verify-full for authenticated TLS.
             "required" | "require" => b = b.ssl_opts(SslOpts::default().with_danger_accept_invalid_certs(true).with_danger_skip_domain_validation(true)),
             "verify_ca" | "verify-ca" => b = b.ssl_opts(SslOpts::default().with_danger_skip_domain_validation(true)),
             "verify_identity" | "verify-full" => b = b.ssl_opts(SslOpts::default()),

@@ -2,7 +2,7 @@
 
 # ⚡ zdb
 
-### The calm, blazing-fast database client that lives in your terminal.
+### The calm, fast database client that lives in your terminal.
 
 PostgreSQL & MySQL. Keyboard-first. Safe by default. Written in Rust.
 
@@ -17,11 +17,13 @@ PostgreSQL & MySQL. Keyboard-first. Safe by default. Written in Rust.
 
 </div>
 
+<p align="center"><img src="docs/screenshots/main.png" alt="zdb results grid" width="800"></p>
+
 ---
 
 ## Why zdb?
 
-You don't need a 500 MB GUI to look at a table. You need something that opens instantly, stays out of your way, and **won't let you wreck production**.
+Sometimes you just want to look at a table without launching a heavyweight GUI. You want something that starts quickly, stays out of your way, and **won't let you wreck production**.
 
 `zdb` gives you a full SQL workbench inside your terminal, with an editor, a results grid, schema browsing, inline editing and an EXPLAIN viewer. It's all driven from the keyboard, and it works over SSH.
 
@@ -65,10 +67,12 @@ zdb postgres://…        # scratch connection (offers to save it when you quit)
 
 ```bash
 # Build from source (requires a recent Rust toolchain)
-git clone <your-repo-url> zdb
+git clone https://github.com/camwebby/zdb.git
 cd zdb
 cargo install --path .
 ```
+
+> **Platforms:** developed and tested on macOS. Linux is built and tested in CI; Windows is untested.
 
 Add a project to `~/.config/zdb/connections.toml`:
 
@@ -104,6 +108,7 @@ Press `^B` for a sidebar of tables and saved queries. Press `⏎` on a row to op
 - **Production opens read-only.** Environments named `prod*`, `prd` or `live`, or with `level = "prod"`, are read-only on the server session. `Space c w` unlocks writes until you quit or go idle for 30 minutes.
 - **Guard rails on dangerous SQL.** `UPDATE`/`DELETE` without `WHERE`, `DROP` and `TRUNCATE` all ask for confirmation. On production you must **type the environment name**.
 - **Transactional edits.** Staged cell edits are reviewed (`^S`), committed atomically, and aborted if the underlying row has changed.
+- **TLS follows libpq semantics.** `sslmode=require` and `prefer` encrypt the connection but do **not** verify the server certificate or hostname. Use `sslmode=verify-full` (or `verify-ca`) in the connection URL if you need protection against man-in-the-middle attacks.
 
 ## ⌨️ Keys at a glance
 
@@ -191,6 +196,10 @@ docker run -d --name zdb-my -e MYSQL_ROOT_PASSWORD=secret -e MYSQL_DATABASE=shop
 - `keys.rs`: commands, keymap, Space menu
 
 </details>
+
+## 📄 License
+
+[MIT](LICENSE)
 
 ---
 

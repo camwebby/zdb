@@ -2,6 +2,11 @@
 name = "zdb"
 version = "0.1.0"
 edition = "2024"
+description = "A keyboard-first terminal UI database client for PostgreSQL and MySQL"
+license = "MIT"
+readme = "README.md"
+keywords = ["postgres", "mysql", "tui", "database", "sql"]
+categories = ["command-line-utilities", "database"]
 
 [dependencies]
 anyhow = "1.0.104"
