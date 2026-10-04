@@ -16,6 +16,9 @@ impl App {
             return;
         }
         self.touch();
+        if std::env::var_os("ZDB_DEBUG_KEYS").is_some() {
+            self.toast(format!("key {:?} {:?}", k.code, k.modifiers));
+        }
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
 
         if let Some(o) = self.overlay.take() {
@@ -103,7 +106,8 @@ impl App {
         match out {
             Outcome::Leave => self.leave_editor(),
             Outcome::NotHandled if k.code == KeyCode::Esc => self.leave_editor(),
-            Outcome::NotHandled if vim_normal && k.code == KeyCode::Char(' ') => self.open_space_menu(""),
+            Outcome::NotHandled if vim_normal && k.code == KeyCode::Char(' ') => { self.open_space_menu("")
+            },
             _ => {}
         }
         let changed = self.tab().editor.generation != before;
@@ -148,7 +152,8 @@ impl App {
             (None, _) => false,
             (Some(_), MenuMode::Off) => false,
             (Some(_), MenuMode::Instant) => true,
-            (Some(s), MenuMode::Delay) => s.opened.elapsed() >= Duration::from_millis(self.settings.space_menu_delay_ms),
+            (Some(s), MenuMode::Delay) => { s.opened.elapsed() >= Duration::from_millis(self.settings.space_menu_delay_ms)
+            },
         }
     }
 
@@ -206,6 +211,14 @@ impl App {
         if self.grid_select_key(k) {
             return;
         }
+        if k.code == KeyCode::Backspace
+            && let Some(t) = &mut self.tabs[self.cur].table
+            && t.filters.pop().is_some()
+        {
+            let i = self.cur;
+            self.refresh_table(i);
+            return;
+        }
         if let Some(a) = self.keymap.lookup(Ctx::Pane, &k) {
             if a == Action::Top {
                 let pos = self.tab().view().map(|v| (v.grid.row, v.grid.col));
@@ -233,8 +246,10 @@ impl App {
         let items = self.sidebar_items();
         let n = items.len();
         match k.code {
-            KeyCode::Up | KeyCode::Char('k') => self.sidebar.sel = self.sidebar.sel.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => self.sidebar.sel = (self.sidebar.sel + 1).min(n.saturating_sub(1)),
+            KeyCode::Up | KeyCode::Char('k') => { self.sidebar.sel = self.sidebar.sel.saturating_sub(1)
+            },
+            KeyCode::Down | KeyCode::Char('j') => { self.sidebar.sel = (self.sidebar.sel + 1).min(n.saturating_sub(1))
+            },
             KeyCode::Char('g') => self.sidebar.sel = 0,
             KeyCode::Char('G') => self.sidebar.sel = n.saturating_sub(1),
             KeyCode::Char('/') => self.sidebar.filtering = true,
@@ -308,7 +323,8 @@ impl App {
 
     fn inspector_key(&mut self, k: KeyEvent) {
         match k.code {
-            KeyCode::Up | KeyCode::Char('k') => self.inspector_scroll = self.inspector_scroll.saturating_sub(1),
+            KeyCode::Up | KeyCode::Char('k') => { self.inspector_scroll = self.inspector_scroll.saturating_sub(1)
+            },
             KeyCode::Down | KeyCode::Char('j') => self.inspector_scroll += 1,
             KeyCode::PageUp => self.inspector_scroll = self.inspector_scroll.saturating_sub(10),
             KeyCode::PageDown => self.inspector_scroll += 10,
@@ -459,7 +475,21 @@ impl App {
             LoadAll => self.load_all(),
             Filter => {
                 if self.tab().is_table() {
-                    self.overlay = Some(Overlay::Prompt(Prompt::new(PromptKind::Filter, "filter", "")));
+                    // start from "this column = this cell" so the common case is just Enter
+                    let d = self.driver();
+                    let init = self
+                        .tab()
+                        .view()
+                        .filter(|v| matches!(v.body, ResultBody::Grid) && v.rs.rows > 0 && !v.rs.cols.is_empty())
+                        .map(|v| {
+                            let c = &v.rs.cols[v.grid.col];
+                            match v.rs.get(v.grid.row, v.grid.col) {
+                                Some(val) => format!("{} = {}", crate::db::quote_ident(d, &c.name), crate::db::literal(d, c.kind, Some(val))),
+                                None => format!("{} is null", crate::db::quote_ident(d, &c.name)),
+                            }
+                        })
+                        .unwrap_or_default();
+                    self.overlay = Some(Overlay::Prompt(Prompt::new(PromptKind::Filter, "filter (or type words to search all columns)", &init)));
                 } else {
                     self.toast("filters work in table tabs · / finds in loaded rows");
                 }
@@ -684,9 +714,32 @@ impl App {
                 }
                 true
             }
+            // with a cell selection, Shift+←/→ (or H/L) widens it to whole rows, all columns
+            KeyCode::Left | KeyCode::Right
+                if shift && v.grid.sel.is_some_and(|s| s.kind == SelKind::Cells) =>
+            {
+                v.grid.sel = v.grid.sel.map(|s| Selection {
+                    kind: SelKind::Rows,
+                    ..s
+                });
+                true
+            }
+            KeyCode::Char('H' | 'L') if v.grid.sel.is_some_and(|s| s.kind == SelKind::Cells) => {
+                v.grid.sel = v.grid.sel.map(|s| Selection {
+                    kind: SelKind::Rows,
+                    ..s
+                });
+                true
+            }
             KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right if shift => {
+                // Shift+↑/↓ selects whole rows, Shift+←/→ a cell range
                 if v.grid.sel.is_none() {
-                    v.grid.sel = Some(Selection { anchor: here, kind: SelKind::Cells });
+                    let kind = if matches!(k.code, KeyCode::Up | KeyCode::Down) {
+                        SelKind::Rows
+                    } else {
+                        SelKind::Cells
+                    };
+                    v.grid.sel = Some(Selection { anchor: here, kind });
                 }
                 let (dr, dc) = match k.code {
                     KeyCode::Up => (-1, 0),
@@ -726,6 +779,8 @@ impl App {
                 return;
             }
             cycle_named(&mut t.sort, &col_name, add);
+            // keep the cursor on this column so `s` again flips the direction
+            self.pending_sort = Some((vec![], (0, col)));
             self.refresh_table(i);
             self.toast("sorted on server");
             return;
@@ -879,7 +934,8 @@ impl App {
             self.toast("save the connection to a project first · Space c d");
             return;
         }
-        let initial = self.tab().saved.clone().unwrap_or_else(|| if self.tab().name.starts_with("untitled-") { String::new() } else { self.tab().name.clone() });
+        let initial = self.tab().saved.clone().unwrap_or_else(|| { if self.tab().name.starts_with("untitled-") { String::new() } else { self.tab().name.clone()
+            } });
         self.overlay = Some(Overlay::Prompt(Prompt::new(PromptKind::SaveQuery, "save query as", &initial)));
     }
 
@@ -1070,9 +1126,11 @@ impl App {
         let table = crate::copy::Table {
             names: cols.iter().map(|c| v.rs.cols[*c].name.as_str()).collect(),
             kinds: cols.iter().map(|c| v.rs.cols[*c].kind).collect(),
-            rows: rows.iter().map(|r| cols.iter().map(|c| v.grid.cell_value(&v.rs, *r, *c)).collect()).collect(),
+            rows: rows.iter().map(|r| { cols.iter().map(|c| v.grid.cell_value(&v.rs, *r, *c)).collect()
+                }).collect(),
         };
-        let tn = table_name.unwrap_or_else(|| crate::sql::table_refs(&v.stmt.orig).first().map(|(t, _)| t.clone()).unwrap_or_else(|| v.label.clone()));
+        let tn = table_name.unwrap_or_else(|| { crate::sql::table_refs(&v.stmt.orig).first().map(|(t, _)| t.clone()).unwrap_or_else(|| v.label.clone())
+        });
         let text = crate::copy::render(fmt, &table, d, &tn);
         let what = match fmt {
             Format::Names => format!("{} column names", cols.len()),
@@ -1114,7 +1172,8 @@ impl App {
         let mut items: Vec<(String, &'static str)> = Vec::new();
         if let Some(q) = qual {
             // alias.col, table.col or schema.table
-            let target = refs.iter().find(|(t, a)| a.as_deref() == Some(q.as_str()) || t == &q || t.rsplit('.').next() == Some(q.as_str())).map(|(t, _)| t.clone()).unwrap_or(q.clone());
+            let target = refs.iter().find(|(t, a)| { a.as_deref() == Some(q.as_str()) || t == &q || t.rsplit('.').next() == Some(q.as_str())
+                }).map(|(t, _)| t.clone()).unwrap_or(q.clone());
             for c in schema.columns_of(&target) {
                 if lw.is_empty() || starts(&c.name) {
                     items.push((c.name.clone(), "column"));
@@ -1134,7 +1193,8 @@ impl App {
             let before: String = text[..cur_off].chars().rev().skip(word.chars().count()).collect::<String>().chars().rev().collect();
             let prev = before.split_whitespace().last().unwrap_or("").to_lowercase();
             let tables_only = matches!(prev.as_str(), "from" | "join" | "into" | "update" | "table");
-            let table_name = |t: &crate::db::schema::TableInfo| if t.schema.is_empty() || t.schema == "public" { t.name.clone() } else { t.display() };
+            let table_name = |t: &crate::db::schema::TableInfo| { if t.schema.is_empty() || t.schema == "public" { t.name.clone() } else { t.display()
+                } };
             if !tables_only {
                 for (t, _) in &refs {
                     for c in schema.columns_of(t) {
@@ -1196,7 +1256,8 @@ impl App {
                     return;
                 }
                 self.space = None;
-                let double = self.last_click.is_some_and(|(t, cx, cy)| t.elapsed() < Duration::from_millis(400) && cx == x && cy == y);
+                let double = self.last_click.is_some_and(|(t, cx, cy)| { t.elapsed() < Duration::from_millis(400) && cx == x && cy == y
+                });
                 self.last_click = Some((Instant::now(), x, y));
                 let l = self.layout.clone();
                 if inside(l.top) {

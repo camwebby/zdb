@@ -204,7 +204,8 @@ impl App {
                 for t in &s.tables {
                     let hint = match (t.kind, t.rows_estimate) {
                         (crate::db::schema::TableKind::View, _) => "view".to_string(),
-                        (_, Some(n)) => format!("~{} rows", crate::grid::group_digits(&n.to_string())),
+                        (_, Some(n)) => { format!("~{} rows", crate::grid::group_digits(&n.to_string()))
+                        },
                         _ => String::new(),
                     };
                     items.push(PItem { prefix: '#', label: t.display(), hint, hint_level: None, data: PData::Table(t.display()) });
@@ -230,7 +231,8 @@ impl App {
             .conns
             .projects
             .iter()
-            .flat_map(|p| p.envs.iter().map(move |e| (env_key(&p.name, &e.name), e.level())))
+            .flat_map(|p| { p.envs.iter().map(move |e| (env_key(&p.name, &e.name), e.level()))
+            })
             .collect();
         for h in self.store.history(1000).unwrap_or_default() {
             let one_line = h.sql.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -265,9 +267,12 @@ impl App {
             KeyCode::Esc => return,
             KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => return,
             KeyCode::Up | KeyCode::BackTab => p.sel = p.sel.saturating_sub(1),
-            KeyCode::Char('p') if k.modifiers.contains(KeyModifiers::CONTROL) => p.sel = p.sel.saturating_sub(1),
-            KeyCode::Down | KeyCode::Tab => p.sel = (p.sel + 1).min(p.shown.len().saturating_sub(1)),
-            KeyCode::Char('n') if k.modifiers.contains(KeyModifiers::CONTROL) => p.sel = (p.sel + 1).min(p.shown.len().saturating_sub(1)),
+            KeyCode::Char('p') if k.modifiers.contains(KeyModifiers::CONTROL) => { p.sel = p.sel.saturating_sub(1)
+            },
+            KeyCode::Down | KeyCode::Tab => { p.sel = (p.sel + 1).min(p.shown.len().saturating_sub(1))
+            },
+            KeyCode::Char('n') if k.modifiers.contains(KeyModifiers::CONTROL) => { p.sel = (p.sel + 1).min(p.shown.len().saturating_sub(1))
+            },
             KeyCode::PageDown => p.sel = (p.sel + 10).min(p.shown.len().saturating_sub(1)),
             KeyCode::PageUp => p.sel = p.sel.saturating_sub(10),
             KeyCode::Enter => {
@@ -424,7 +429,8 @@ impl App {
             PromptKind::Filter => {
                 let word: String = p.input.text.chars().rev().take_while(|c| c.is_alphanumeric() || *c == '_').collect::<Vec<_>>().into_iter().rev().collect();
                 let names: Vec<String> = self.tab().view().map(|v| v.rs.cols.iter().map(|c| c.name.clone()).collect()).unwrap_or_default();
-                p.completions = if word.is_empty() { vec![] } else { names.into_iter().filter(|n| n.to_lowercase().starts_with(&word.to_lowercase()) && *n != word).collect() };
+                p.completions = if word.is_empty() { vec![] } else { names.into_iter().filter(|n| { n.to_lowercase().starts_with(&word.to_lowercase()) && *n != word
+                        }).collect() };
                 p.comp_idx = 0;
             }
             PromptKind::ExportPath { .. } => {
@@ -463,7 +469,12 @@ impl App {
                 }
                 let i = self.cur;
                 if let Some(t) = &mut self.tabs[i].table {
-                    t.filters.push(text.trim().to_string());
+                    let text = text.trim();
+                    t.filters.push(if crate::app::run::is_bare_search(text) {
+                        format!("~{text}")
+                    } else {
+                        text.to_string()
+                    });
                 }
                 self.refresh_table(i);
             }
@@ -664,8 +675,10 @@ impl App {
                 }
             }
             KeyCode::Tab | KeyCode::Down => f.focus = order[(pos + 1) % order.len()],
-            KeyCode::BackTab | KeyCode::Up => f.focus = order[(pos + order.len() - 1) % order.len()],
-            KeyCode::Enter | KeyCode::Char(' ') if matches!(f.focus, ADVANCED | READONLY | TEST | SAVE) => match f.focus {
+            KeyCode::BackTab | KeyCode::Up => { f.focus = order[(pos + order.len() - 1) % order.len()]
+            },
+            KeyCode::Enter | KeyCode::Char(' ') if matches!(f.focus, ADVANCED | READONLY | TEST | SAVE) =>
+            { match f.focus {
                 ADVANCED => f.advanced = !f.advanced,
                 READONLY => {
                     f.read_only = Some(!f.effective_read_only());
@@ -676,6 +689,7 @@ impl App {
                 _ => {
                     if self.form_save(&mut f) {
                         return;
+                    };
                     }
                 }
             },
@@ -872,7 +886,8 @@ impl Help {
         let q = self.query.text.to_lowercase();
         self.entries
             .iter()
-            .filter(|(k, d, s)| q.is_empty() || k.to_lowercase().contains(&q) || d.to_lowercase().contains(&q) || s.to_lowercase().contains(&q))
+            .filter(|(k, d, s)| { q.is_empty() || k.to_lowercase().contains(&q) || d.to_lowercase().contains(&q) || s.to_lowercase().contains(&q)
+            })
             .collect()
     }
 }

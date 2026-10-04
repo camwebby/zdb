@@ -323,10 +323,19 @@ impl App {
         let mut s = format!("select * from {}", quote_qualified(d, &sch, &name));
         if !t.filters.is_empty() {
             s.push_str(" where ");
-            s.push_str(&t.filters.iter().map(|f| format!("({f})")).collect::<Vec<_>>().join(" and "));
+            let cols: Vec<String> = schema
+                .as_ref()
+                .and_then(|sc| {
+                    sc.table(&t.name)
+                        .and_then(|ti| sc.columns.get(&ti.display()))
+                })
+                .map(|cs| cs.iter().map(|c| c.name.clone()).collect())
+                .unwrap_or_default();
+            s.push_str(&t.filters.iter().map(|f| format!("({})", filter_sql(d, f, &cols))).collect::<Vec<_>>().join(" and "));
         }
         let order: Vec<String> = if !t.sort.is_empty() {
-            t.sort.iter().map(|(c, desc)| format!("{}{}", db::quote_ident(d, c), if *desc { " desc" } else { "" })).collect()
+            t.sort.iter().map(|(c, desc)| { format!("{}{}", db::quote_ident(d, c), if *desc { " desc" } else { "" })
+                }).collect()
         } else {
             schema.map(|s| s.primary_key(&t.name)).unwrap_or_default().iter().map(|c| format!("{} desc", db::quote_ident(d, c))).collect()
         };
@@ -425,7 +434,8 @@ impl App {
         for (r, cols) in by_row {
             let sets: Vec<String> = cols
                 .iter()
-                .map(|(c, v)| format!("{} = {}", db::quote_ident(d, &view.rs.cols[*c].name), db::literal(d, view.rs.cols[*c].kind, v.as_deref())))
+                .map(|(c, v)| { format!("{} = {}", db::quote_ident(d, &view.rs.cols[*c].name), db::literal(d, view.rs.cols[*c].kind, v.as_deref()))
+                })
                 .collect();
             let mut wh = Vec::new();
             for k in &pk {
@@ -636,7 +646,11 @@ impl App {
                     }
                     if v.stmt.purpose == Purpose::Browse {
                         if let Some(tt) = &t.table {
-                            v.grid.sort = tt.sort.iter().filter_map(|(n, d)| v.rs.cols.iter().position(|c| &c.name == n).map(|i| (i, *d))).collect();
+                            v.grid.sort = tt.sort.iter().filter_map(|(n, d)| { v.rs.cols.iter().position(|c| &c.name == n).map(|i| (i, *d))
+                                }).collect();
+                        }
+                        if let Some((_, (_, col))) = pending_sort {
+                            v.grid.col = col.min(v.rs.cols.len().saturating_sub(1));
                         }
                     } else if let Some((sort, (_, col))) = pending_sort.filter(|_| v.stmt.server_sort) {
                         v.grid.sort = sort;
@@ -694,7 +708,8 @@ impl App {
                         t.results.pop();
                     }
                     let tag = match done.rows_affected {
-                        Some(n) if !info.verb.is_empty() => format!("{} {n}", info.verb.to_uppercase()),
+                        Some(n) if !info.verb.is_empty() => { format!("{} {n}", info.verb.to_uppercase())
+                        },
                         _ => info.verb.to_uppercase(),
                     };
                     t.push_msg(MsgKind::Info, format!("{tag} · {ms} ms"));
@@ -728,7 +743,8 @@ impl App {
             JobEv::Finished { ms } => {
                 let run = t.run.take().unwrap();
                 let commit = run.stmts.iter().any(|s| s.purpose == Purpose::Commit);
-                let ddl = run.stmts.iter().any(|s| matches!(sql::classify(&s.exec).kind, Kind::Create | Kind::Alter | Kind::Drop));
+                let ddl = run.stmts.iter().any(|s| { matches!(sql::classify(&s.exec).kind, Kind::Create | Kind::Alter | Kind::Drop)
+                });
                 if !run.any_error {
                     let n_views = t.results.len();
                     t.last = Some((
@@ -836,7 +852,8 @@ fn attach_keys(v: &mut ResultView, schema: &Schema, table: Option<&str>) {
 /// Map a server error position onto the editor: the token at that spot, on its line.
 fn locate_error(ed: &crate::editor::Editor, stmt: &JobStmt, offset: usize, err: &DbError) -> EditorError {
     let orig = &stmt.orig;
-    let pos = err.position.map(|p| orig.char_indices().nth(p).map(|(b, _)| b).unwrap_or(orig.len())).or_else(|| {
+    let pos = err.position.map(|p| { orig.char_indices().nth(p).map(|(b, _)| b).unwrap_or(orig.len())
+        }).or_else(|| {
         // MySQL: "... near 'snippet' at line N"
         let m = &err.message;
         let i = m.find("near '")? + 6;
@@ -1127,7 +1144,8 @@ impl Sink for FileSink {
                 let obj = serde_json::to_string(&serde_json::Value::Object(m)).unwrap_or_default();
                 format!("{}  {obj}", if self.rows == 0 { "[\n" } else { ",\n" })
             }
-            _ => crate::copy::render(crate::copy::Format::Insert, &t, self.driver, &self.table) + "\n",
+            _ => { crate::copy::render(crate::copy::Format::Insert, &t, self.driver, &self.table) + "\n"
+            },
         };
         self.write(&line);
         self.rows += 1;
@@ -1135,4 +1153,52 @@ impl Sink for FileSink {
             let _ = self.tx.send(Msg::Export(ExportEv::Progress(self.rows)));
         }
     }
+}
+
+/// A filter chip as SQL. `~word` chips (typed without an operator) search every column.
+pub fn filter_sql(d: crate::config::DriverKind, f: &str, cols: &[String]) -> String {
+    let Some(word) = f.strip_prefix('~') else {
+        return f.to_string();
+    };
+    if cols.is_empty() {
+        return "false".into();
+    }
+    let pat = crate::sql::quote_literal(&format!(
+        "%{}%",
+        word.replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    ));
+    cols.iter()
+        .map(|c| {
+            let q = db::quote_ident(d, c);
+            match d {
+                crate::config::DriverKind::Postgres => format!("{q}::text ilike {pat}"),
+                _ => format!("cast({q} as char) like {pat}"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" or ")
+}
+
+/// True when filter text has no comparison, so it is meant as a plain search.
+pub fn is_bare_search(text: &str) -> bool {
+    let lower = format!(" {} ", text.to_lowercase());
+    let ops = [
+        "=",
+        "<",
+        ">",
+        "~",
+        "!",
+        " is ",
+        " like ",
+        " ilike ",
+        " in ",
+        " in(",
+        " between ",
+        " not ",
+        "(",
+        " exists",
+    ];
+    !ops.iter().any(|o| lower.contains(o))
 }

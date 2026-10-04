@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- Prefill table filters from the selected cell and support plain-text searches across columns.
+- Remove the most recent filter with Backspace and show clearer filter hints.
+- Improve row selection with Shift+arrow keys and preserve the selected column after sorting.
+- Show more useful result-grid shortcuts and add optional key diagnostics with `ZDB_DEBUG_KEYS`.
+
 ## 0.1.0
 
 - Initial public release: terminal UI for PostgreSQL and MySQL with SQL editor, results grid,

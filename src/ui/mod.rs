@@ -489,14 +489,17 @@ fn draw_chips(f: &mut Frame, app: &App, r: Rect) {
             let (nx, _) = f.buffer_mut().set_stringn(x, r.y, "and ", (r.right().saturating_sub(x)) as usize, Style::default().add_modifier(Modifier::DIM));
             x = nx;
         }
-        let text = format!("[{c}]");
+        let text = match c.strip_prefix('~') {
+            Some(w) => format!("[any column ~ {w}]"),
+            None => format!("[{c}]"),
+        };
         let (nx, _) = f.buffer_mut().set_stringn(x, r.y, &text, (r.right().saturating_sub(x)) as usize, Style::default().fg(app.theme.accent));
         x = nx + 1;
         if x >= r.right() {
             break;
         }
     }
-    let hint = "  F clear";
+    let hint = "  ⌫ remove last · F clear all";
     if x + hint.len() as u16 <= r.right() {
         f.buffer_mut().set_string(x, r.y, hint, Style::default().add_modifier(Modifier::DIM));
     }
@@ -878,7 +881,17 @@ fn hints(app: &App) -> String {
             if app.tab().pending_edits() > 0 {
                 vec![h(Action::Save, "review"), "u undo edit".into(), h(Action::Help, "help")]
             } else {
-                vec!["y copy".into(), "s sort".into(), "v select".into(), format!("{} menu", app.glyphs.space), h(Action::Help, "help")]
+                let mut v =
+                vec![format!("{} inspect", app.glyphs.enter)];
+                if app.tab().table.is_some() {
+                    v.push("e edit".into());
+                    v.push("f filter".into());
+                }
+                v.extend(["y copy".into(), "s sort".into(),
+                    "V row".into(),
+                    "/ find".into(),
+                    "i editor".into(), format!("{} menu", app.glyphs.space), h(Action::Help, "help")]);
+                v
             }
         }
         Focus::Sidebar => vec![format!("{} open", app.glyphs.enter), "/ filter".into(), "s structure".into()],
