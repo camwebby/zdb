@@ -1,5 +1,5 @@
-//! Copy formats for grid selections, and the clipboard (OSC 52, plus the system
-//! clipboard when running locally).
+//! Copy formats for grid selections, and the clipboard (the system clipboard
+//! when running locally, or OSC 52 when it is unavailable or over SSH).
 
 use crate::config::DriverKind;
 use crate::db::{ColKind, literal, quote_ident};
@@ -166,14 +166,19 @@ impl Clipboard {
     }
 
     pub fn set(&mut self, text: &str) -> Result<(), String> {
-        let osc = osc52(text);
-        let mut out = std::io::stdout();
-        let _ = out.write_all(osc.as_bytes()).and_then(|_| out.flush());
-        if let Some(c) = &mut self.local {
-            c.set_text(text.to_string()).map_err(|e| e.to_string())?;
-        }
-        Ok(())
+        let local = self.local.as_mut().map(|c| move |text: &str| c.set_text(text.to_string()).map_err(|e| e.to_string()));
+        write_clipboard(text, local, &mut std::io::stdout())
     }
+}
+
+fn write_clipboard(text: &str, local: Option<impl FnOnce(&str) -> Result<(), String>>, out: &mut impl Write) -> Result<(), String> {
+    if let Some(set_local) = local {
+        // OSC 52 makes the terminal write the same clipboard asynchronously.
+        // Using both paths can steal macOS pasteboard ownership between
+        // arboard's clearContents and writeObjects calls.
+        return set_local(text);
+    }
+    out.write_all(osc52(text).as_bytes()).and_then(|_| out.flush()).map_err(|e| e.to_string())
 }
 
 pub fn osc52(text: &str) -> String {
@@ -219,5 +224,77 @@ mod tests {
     #[test]
     fn osc52_encodes() {
         assert_eq!(osc52("hi"), "\x1b]52;c;aGk=\x07");
+    }
+
+    #[test]
+    fn local_copy_does_not_race_terminal_clipboard() {
+        use std::cell::Cell;
+
+        // Model an OSC 52-capable terminal claiming the pasteboard as soon as
+        // output is written. A competing native write then fails like AppKit.
+        struct Terminal<'a>(&'a Cell<bool>);
+        impl Write for Terminal<'_> {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.set(true);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let terminal_wrote = Cell::new(false);
+        let text = render(Format::Csv, &t(), DriverKind::Postgres, "x");
+        let local = |copied: &str| {
+            assert_eq!(copied, text);
+            if terminal_wrote.get() {
+                Err("NSPasteboard#writeObjects: returned false".into())
+            } else {
+                Ok(())
+            }
+        };
+        assert_eq!(write_clipboard(&text, Some(local), &mut Terminal(&terminal_wrote)), Ok(()));
+        assert!(!terminal_wrote.get(), "native copies must not also emit OSC 52");
+    }
+
+    #[test]
+    fn local_clipboard_errors_are_reported_without_terminal_write() {
+        let mut out = Vec::new();
+        let error = "NSPasteboard#writeObjects: returned false";
+        let result = write_clipboard("hi", Some(|_: &str| Err(error.to_string())), &mut out);
+        assert_eq!(result, Err(error.to_string()));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn clipboard_without_native_backend_uses_osc52() {
+        let text = render(Format::Csv, &t(), DriverKind::Postgres, "x");
+        let mut out = Vec::new();
+        write_clipboard(&text, None::<fn(&str) -> Result<(), String>>, &mut out).unwrap();
+        assert_eq!(out, osc52(&text).into_bytes());
+    }
+
+    #[test]
+    fn terminal_clipboard_reports_write_and_flush_errors() {
+        struct FailingTerminal {
+            fail_write: bool,
+        }
+        impl Write for FailingTerminal {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                if self.fail_write {
+                    Err(std::io::Error::other("write failed"))
+                } else {
+                    Ok(buf.len())
+                }
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("flush failed"))
+            }
+        }
+
+        for fail_write in [true, false] {
+            let result = write_clipboard("hi", None::<fn(&str) -> Result<(), String>>, &mut FailingTerminal { fail_write });
+            assert_eq!(result, Err(if fail_write { "write failed" } else { "flush failed" }.into()));
+        }
     }
 }
