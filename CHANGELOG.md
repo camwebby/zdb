@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+- Fix intermittent macOS clipboard errors when copying CSV with headers and other formats by avoiding competing native and terminal clipboard writes.
+- Report terminal clipboard write failures instead of showing a successful copy.
+
 ## 0.1.1
 
 - Prefill table filters from the selected cell and support plain-text searches across columns.
