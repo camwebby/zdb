@@ -34,6 +34,9 @@ pub fn draw(f: &mut Frame, r: Rect, v: &mut ResultView, cx: &Ctx) {
     let body_rows = r.height.saturating_sub(header_rows);
     gs.clamp(rs);
     gs.ensure_visible(body_rows as usize, r.width.saturating_sub(1));
+    // A larger viewport (resize or layout change) can leave the old offset
+    // past the last full page, even while the cursor is still visible.
+    gs.top = gs.top.min(rs.rows.saturating_sub(body_rows as usize));
     let dim = |s: Style| if cx.stale { s.add_modifier(Modifier::DIM) } else { s };
 
     // which columns are visible

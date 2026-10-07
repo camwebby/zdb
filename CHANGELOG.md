@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Fix a crash when scrolling near the bottom of results and enlarging the terminal or result grid.
+
 ## 0.1.2
 
 - Fix intermittent macOS clipboard errors when copying CSV with headers and other formats by avoiding competing native and terminal clipboard writes.

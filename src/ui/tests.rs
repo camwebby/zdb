@@ -230,3 +230,23 @@ async fn mouse_clicks_hit_what_was_drawn() {
     a.on_mouse(ev);
     assert_eq!(a.tab().view().unwrap().grid.top, 3);
 }
+
+#[tokio::test]
+async fn scrolling_at_bottom_then_growing_terminal_keeps_marker_in_grid() {
+    use crossterm::event::{MouseEvent, MouseEventKind};
+    let mut a = app();
+    a.tabs[0].results.push(grid_view());
+    a.focus = Focus::Results;
+    render(&mut a, 149, 24);
+    for _ in 0..40 {
+        let l = &a.tab().view().unwrap().grid.layout;
+        let ev = MouseEvent { kind: MouseEventKind::ScrollDown, column: l.cols[0].1, row: l.body_y, modifiers: KeyModifiers::NONE };
+        a.on_mouse(ev);
+        render(&mut a, 149, 24);
+    }
+    let s = render(&mut a, 149, 36);
+    let v = a.tab().view().unwrap();
+    let l = &v.grid.layout;
+    assert!(v.grid.top <= v.rs.rows.saturating_sub(l.body_rows as usize));
+    assert!(s.lines().skip(l.body_y as usize).take(l.body_rows as usize).any(|line| line.ends_with(a.glyphs.bar)));
+}
