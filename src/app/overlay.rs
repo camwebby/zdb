@@ -216,7 +216,8 @@ impl App {
             None => {}
         }
         for c in COMMANDS.iter().filter(|c| !c.title.is_empty()) {
-            items.push(PItem { prefix: '>', label: c.title.to_string(), hint: self.keymap.hint(c.action), hint_level: None, data: PData::Cmd(c.action) });
+            let label = if c.action == Action::AllowWrites && self.writes_unlocked() { "connection: lock writes" } else { c.title };
+            items.push(PItem { prefix: '>', label: label.to_string(), hint: self.keymap.hint(c.action), hint_level: None, data: PData::Cmd(c.action) });
         }
         for q in self.store.saved_queries(&self.project).unwrap_or_default() {
             items.push(PItem {

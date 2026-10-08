@@ -167,6 +167,11 @@ async fn prod_is_red_and_read_only() {
     // unlock: Space c w
     a.do_action(crate::keys::Action::AllowWrites);
     assert!(!a.read_only());
+    key(&mut a, KeyCode::Char('k'), KeyModifiers::CONTROL);
+    typ(&mut a, ">writes");
+    let s = render(&mut a, 80, 24);
+    assert!(s.contains("lock writes") && !s.contains("allow writes"), "{s}");
+    key(&mut a, KeyCode::Esc, KeyModifiers::NONE);
     key(&mut a, KeyCode::Char('r'), KeyModifiers::CONTROL);
     let s = render(&mut a, 80, 24);
     assert!(s.contains("type prod to confirm"), "{s}");

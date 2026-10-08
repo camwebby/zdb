@@ -926,7 +926,13 @@ fn draw_space_menu(f: &mut Frame, app: &App, body: Rect) {
             continue;
         }
         f.buffer_mut().set_string(x, y, it.key.to_string(), Style::default().fg(t.accent).add_modifier(Modifier::BOLD));
-        let label = if it.submenu.is_some() { format!("{} {}", it.label, "") } else { it.label.to_string() };
+        let label = if it.submenu.is_some() {
+            format!("{} {}", it.label, "")
+        } else if it.action == Some(crate::keys::Action::AllowWrites) && app.writes_unlocked() {
+            "lock writes".to_string()
+        } else {
+            it.label.to_string()
+        };
         let style = if it.submenu.is_some() { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };
         f.buffer_mut().set_stringn(x + 2, y, &label, col_w.saturating_sub(3) as usize, style);
     }
