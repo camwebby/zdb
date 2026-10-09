@@ -225,7 +225,7 @@ impl App {
             let job = app.alloc_id();
             let env = app.key();
             let env_name = app.env.clone();
-            let silent = stmts.iter().all(|s| matches!(s.purpose, Purpose::Silent | Purpose::Commit));
+            let silent = stmts.iter().all(|s| matches!(s.purpose, Purpose::Silent | Purpose::Commit | Purpose::Delete));
             let t = &mut app.tabs[idx];
             if !silent {
                 t.results.clear();
@@ -437,18 +437,35 @@ impl App {
                 .map(|(c, v)| { format!("{} = {}", db::quote_ident(d, &view.rs.cols[*c].name), db::literal(d, view.rs.cols[*c].kind, v.as_deref()))
                 })
                 .collect();
-            let mut wh = Vec::new();
-            for k in &pk {
-                let ci = view.rs.cols.iter().position(|c| &c.name == k).ok_or(format!("primary key {k} not in result"))?;
-                let v = view.rs.get(r, ci);
-                wh.push(match v {
-                    Some(v) => format!("{} = {}", db::quote_ident(d, k), db::literal(d, view.rs.cols[ci].kind, Some(v))),
-                    None => format!("{} is null", db::quote_ident(d, k)),
-                });
-            }
-            out.push(format!("update {q} set {} where {}", sets.join(", "), wh.join(" and ")));
+            let wh = pk_where(d, view, &pk, r)?;
+            out.push(format!("update {q} set {} where {wh}", sets.join(", ")));
         }
         Ok(out)
+    }
+
+    /// One `delete … where <pk>` per data row, for the rows the caller picked.
+    pub fn delete_statements(&self, rows: &[usize]) -> Result<Vec<String>, String> {
+        let tab = self.tab();
+        let t = tab.table.as_ref().ok_or("not a table tab")?;
+        let view = tab.results.first().ok_or("no data")?;
+        let schema = self.schema().ok_or("schema not loaded")?;
+        let pk = schema.primary_key(&t.name);
+        if pk.is_empty() {
+            return Err(format!("{} has no primary key", t.name));
+        }
+        let d = self.driver();
+        let info = schema.table(&t.name).ok_or("table not in schema")?;
+        let q = quote_qualified(d, &info.schema, &info.name);
+        rows.iter().map(|r| Ok(format!("delete from {q} where {}", pk_where(d, view, &pk, *r)?))).collect()
+    }
+
+    pub fn run_delete(&mut self, stmts: Vec<String>) {
+        let job: Vec<JobStmt> = stmts
+            .into_iter()
+            .map(|s| JobStmt { exec: s.clone(), orig: s, offset: None, label: "delete".into(), cap: None, purpose: Purpose::Delete, server_sort: false })
+            .collect();
+        let i = self.cur;
+        self.start_job(i, job, true);
     }
 
     pub fn commit_edits(&mut self) {
@@ -633,7 +650,7 @@ impl App {
             JobEv::Start(i) => {
                 run.cur = i;
                 let stmt = run.stmts[i].clone();
-                if !matches!(stmt.purpose, Purpose::Silent | Purpose::Commit) {
+                if !matches!(stmt.purpose, Purpose::Silent | Purpose::Commit | Purpose::Delete) {
                     t.results.push(ResultView::new(stmt));
                 }
             }
@@ -702,6 +719,12 @@ impl App {
                     } else if !v.grid.sort.is_empty() && v.stmt.purpose != Purpose::Browse && !v.stmt.server_sort {
                         v.grid.apply_local_sort(&v.rs);
                     }
+                    if v.stmt.purpose == Purpose::Browse
+                        && let Some((row, col, top)) = t.restore_cursor.take() {
+                            v.grid.row = row;
+                            v.grid.col = col;
+                            v.grid.top = top;
+                        }
                     v.grid.clamp(&v.rs);
                 } else {
                     if has_view {
@@ -743,6 +766,7 @@ impl App {
             JobEv::Finished { ms } => {
                 let run = t.run.take().unwrap();
                 let commit = run.stmts.iter().any(|s| s.purpose == Purpose::Commit);
+                let deleted = run.stmts.iter().filter(|s| s.purpose == Purpose::Delete).count();
                 let ddl = run.stmts.iter().any(|s| { matches!(sql::classify(&s.exec).kind, Kind::Create | Kind::Alter | Kind::Drop)
                 });
                 if !run.any_error {
@@ -785,9 +809,28 @@ impl App {
                 if ddl && self.schemas.contains_key(&self.key()) {
                     self.load_schema();
                 }
+                if deleted > 0 && !run.any_error {
+                    self.toast(format!("Deleted {deleted} row{}", if deleted == 1 { "" } else { "s" }));
+                    let t = &mut self.tabs[idx];
+                    t.restore_cursor = t.results.first().map(|v| (v.grid.row, v.grid.col, v.grid.top));
+                    self.refresh_table(idx);
+                }
             }
         }
     }
+}
+
+/// `pk = value and …` identifying a data row by its primary key.
+fn pk_where(d: DriverKind, view: &ResultView, pk: &[String], row: usize) -> Result<String, String> {
+    let mut wh = Vec::new();
+    for k in pk {
+        let ci = view.rs.cols.iter().position(|c| &c.name == k).ok_or(format!("primary key {k} not in result"))?;
+        wh.push(match view.rs.get(row, ci) {
+            Some(v) => format!("{} = {}", db::quote_ident(d, k), db::literal(d, view.rs.cols[ci].kind, Some(v))),
+            None => format!("{} is null", db::quote_ident(d, k)),
+        });
+    }
+    Ok(wh.join(" and "))
 }
 
 pub fn fmt_ms(ms: u64) -> String {
@@ -1017,7 +1060,7 @@ async fn job_task(
         match res {
             Ok(done) => {
                 if transactional && done.rows_affected == Some(0) {
-                    send(JobEv::Error { idx: i, err: DbError::msg("row changed or was deleted since it was loaded (0 rows updated)"), ms });
+                    send(JobEv::Error { idx: i, err: DbError::msg("row changed or was deleted since it was loaded (0 rows affected)"), ms });
                     failed = true;
                     break;
                 }

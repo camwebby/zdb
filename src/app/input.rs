@@ -502,6 +502,7 @@ impl App {
                 }
             }
             EditCell => self.edit_cell(),
+            DeleteRow => self.delete_rows(),
             UndoEdit => {
                 let t = self.tab_mut();
                 if let Some(key) = t.edit_order.pop()
@@ -1037,6 +1038,51 @@ impl App {
         );
     }
 
+    /// Delete the row under the cursor, or every selected row, after a confirmation.
+    fn delete_rows(&mut self) {
+        let Some(t) = self.tab().table.clone() else {
+            self.toast("deleting works in table tabs · ^P opens one");
+            return;
+        };
+        if t.structure {
+            return;
+        }
+        if self.read_only() {
+            self.toast_err(format!("{} is read-only · Space c w allows writes", self.env));
+            return;
+        }
+        let pk = self.schema().map(|s| s.primary_key(&t.name)).unwrap_or_default();
+        if pk.is_empty() {
+            self.toast(format!("{} has no primary key, so its rows are read-only here", t.name));
+            return;
+        }
+        let Some(v) = self.tab().results.first().filter(|v| matches!(v.body, ResultBody::Grid) && v.rs.rows > 0) else { return };
+        if !v.grid.edits.is_empty() {
+            self.toast_err("commit or undo the staged edits before deleting rows");
+            return;
+        }
+        let display = match v.grid.sel {
+            Some(s) if s.kind == SelKind::Rows => {
+                let (lo, hi) = (s.anchor.0.min(v.grid.row), s.anchor.0.max(v.grid.row));
+                lo..=hi.min(v.rs.rows - 1)
+            }
+            _ => v.grid.row..=v.grid.row,
+        };
+        let rows: Vec<usize> = display.map(|r| v.grid.data_row(r)).collect();
+        let stmts = match self.delete_statements(&rows) {
+            Ok(s) => s,
+            Err(e) => {
+                self.toast_err(e);
+                return;
+            }
+        };
+        let n = rows.len();
+        let body = format!("this deletes {n} row{} from {} and cannot be undone", if n == 1 { "" } else { "s" }, t.name);
+        let shown = stmts.iter().map(|s| format!("{s};")).collect::<Vec<_>>().join("\n");
+        let require = if self.level() == Level::Prod { Some(self.env.clone()) } else { None };
+        self.confirm("Delete", body, shown, require, Box::new(move |app: &mut App| app.run_delete(stmts)));
+    }
+
     fn edit_cell(&mut self) {
         let Some(t) = self.tab().table.clone() else {
             self.toast("editing works in table tabs · ^P opens one");
@@ -1503,6 +1549,7 @@ fn describe(a: Action) -> &'static str {
         ClearFilters => "clear filters",
         EditCell => "edit cell (table tabs with a primary key)",
         UndoEdit => "undo last staged edit",
+        DeleteRow => "delete row, or selected rows (table tabs with a primary key)",
         NextResult => "next result",
         PrevResult => "previous result",
         Escape => "clear selection / close inspector",

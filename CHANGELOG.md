@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add `D` to delete the row under the cursor, or every selected row, from a table tab. It asks for confirmation, runs in one transaction, and keeps your place in the results.
+
 ## 0.1.3
 
 - Fix a crash when scrolling near the bottom of results and enlarging the terminal or result grid.

@@ -49,6 +49,7 @@ pub enum Purpose {
     Explain { analyze: bool },
     Browse,
     Commit,
+    Delete,
     Silent,
 }
 
@@ -211,6 +212,8 @@ pub struct Tab {
     pub stale_from: Option<String>,
     pub last: Option<(bool, String)>,
     pub edit_order: Vec<(usize, usize)>,
+    /// Cursor (row, col, top) to put back once the table reload after a delete finishes.
+    pub restore_cursor: Option<(usize, usize, usize)>,
     pub structure: Vec<ResultView>,
     stmt_cache: std::cell::RefCell<(u64, bool, Vec<crate::sql::Stmt>)>,
 }
@@ -238,6 +241,7 @@ impl Tab {
             stale_from: None,
             last: None,
             edit_order: Vec::new(),
+            restore_cursor: None,
             structure: Vec::new(),
             stmt_cache: std::cell::RefCell::new((u64::MAX, false, Vec::new())),
         }

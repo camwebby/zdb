@@ -358,3 +358,59 @@ async fn it_mysql() {
     assert!(h.errors().is_empty(), "{:?}", h.errors());
     assert_eq!(h.cell(0, 4).as_deref(), Some("0x0102"));
 }
+
+#[tokio::test]
+async fn it_sqlite_delete_rows() {
+    let path = std::env::temp_dir().join(format!("zdb-it-delete-{}.db", std::process::id()));
+    std::fs::File::create(&path).unwrap();
+    // the harness reads its URL from an env var, so go through one
+    unsafe { std::env::set_var("ZDB_TEST_SQLITE_DELETE", format!("sqlite://{}", path.display())) };
+    let mut h = harness("ZDB_TEST_SQLITE_DELETE").unwrap();
+    h.run_all("create table it_del (id integer primary key, name text); insert into it_del (name) values ('a'),('b'),('c'),('d'),('e');").await;
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    h.app.open_table("it_del", None);
+    h.settle().await;
+    h.app.focus = Focus::Results;
+    assert_eq!(h.rows(), 5);
+
+    // D on a row asks first, then deletes it and keeps the cursor on the same position
+    h.app.tab_mut().view_mut().unwrap().grid.row = 1;
+    let (id, next) = (h.cell(1, 0).unwrap(), h.cell(2, 1));
+    h.key(KeyCode::Char('D'), KeyModifiers::SHIFT);
+    let Some(crate::app::overlay::Overlay::Confirm(c)) = &h.app.overlay else { panic!("confirm") };
+    assert_eq!(c.sql, format!("delete from it_del where id = {id};"));
+    h.key(KeyCode::Enter, KeyModifiers::NONE);
+    h.settle().await;
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    assert_eq!(h.rows(), 4);
+    assert_eq!(h.app.tab().view().unwrap().grid.row, 1);
+    assert_eq!(h.cell(1, 1), next);
+
+    // Esc on the confirm leaves the data alone
+    h.key(KeyCode::Char('D'), KeyModifiers::SHIFT);
+    h.key(KeyCode::Esc, KeyModifiers::NONE);
+    assert!(h.app.overlay.is_none());
+    assert_eq!(h.rows(), 4);
+
+    // a row selection deletes every selected row in one go
+    h.app.tab_mut().view_mut().unwrap().grid.row = 0;
+    h.key(KeyCode::Down, KeyModifiers::SHIFT);
+    h.key(KeyCode::Char('D'), KeyModifiers::SHIFT);
+    let Some(crate::app::overlay::Overlay::Confirm(c)) = &h.app.overlay else { panic!("confirm") };
+    assert_eq!(c.sql.lines().count(), 2, "{}", c.sql);
+    h.key(KeyCode::Enter, KeyModifiers::NONE);
+    h.settle().await;
+    assert_eq!(h.rows(), 2);
+
+    // staged edits must be committed or undone first
+    h.app.do_action(Action::EditCell);
+    {
+        let Some(crate::app::overlay::Overlay::Prompt(p)) = &mut h.app.overlay else { panic!("edit prompt") };
+        p.input.set("x");
+    }
+    h.key(KeyCode::Enter, KeyModifiers::NONE);
+    h.key(KeyCode::Char('D'), KeyModifiers::SHIFT);
+    assert!(h.app.overlay.is_none());
+    assert_eq!(h.rows(), 2);
+    let _ = std::fs::remove_file(&path);
+}
