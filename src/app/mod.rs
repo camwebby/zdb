@@ -50,6 +50,7 @@ pub enum Purpose {
     Browse,
     Commit,
     Delete,
+    Insert,
     Silent,
 }
 
@@ -411,6 +412,8 @@ pub struct App {
     pub last_click: Option<(Instant, u16, u16)>,
     pub quit_after_save: bool,
     pub quit_confirmed_edits: bool,
+    /// The insert form that was just submitted, reopened with its values if the insert fails.
+    pub insert_draft: Option<overlay::InsertForm>,
     /// Sort to apply to the grid when a server-side re-sort finishes: (sort, cursor).
     pub pending_sort: Option<PendingSort>,
 }
@@ -483,6 +486,7 @@ impl App {
             last_click: None,
             quit_after_save: false,
             quit_confirmed_edits: false,
+            insert_draft: None,
             pending_sort: None,
             settings,
         };

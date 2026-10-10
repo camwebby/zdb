@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add `a` to insert a row from a form in table tabs, and `A` to start it from a copy of the current row. The form lists every writable column with its type, key and required markers, shows what an empty field will do (the column default, `NULL`, or required), previews the `INSERT`, and reopens with your values if the database rejects it. `^N` cycles a field between default, `NULL` and an empty string. The new row appears at the top of the table.
 - Add `D` to delete the row under the cursor, or every selected row, from a table tab. It asks for confirmation, runs in one transaction, and keeps your place in the results.
 
 ## 0.1.3

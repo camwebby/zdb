@@ -414,3 +414,136 @@ async fn it_sqlite_delete_rows() {
     assert_eq!(h.rows(), 2);
     let _ = std::fs::remove_file(&path);
 }
+
+fn type_text(h: &mut H, s: &str) {
+    for c in s.chars() {
+        h.key(KeyCode::Char(c), KeyModifiers::NONE);
+    }
+}
+
+#[tokio::test]
+async fn it_sqlite_insert_rows() {
+    let path = std::env::temp_dir().join(format!("zdb-it-insert-{}.db", std::process::id()));
+    std::fs::File::create(&path).unwrap();
+    unsafe { std::env::set_var("ZDB_TEST_SQLITE_INSERT", format!("sqlite://{}", path.display())) };
+    let mut h = harness("ZDB_TEST_SQLITE_INSERT").unwrap();
+    h.run_all(
+        "create table it_ins (id integer primary key, email text not null unique, plan text not null default 'free', note text, born text generated always as (upper(email)) virtual);\
+         insert into it_ins (email, note) values ('a@x.io', 'first');",
+    )
+    .await;
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    h.app.open_table("it_ins", None);
+    h.settle().await;
+    h.app.focus = Focus::Results;
+
+    // the form skips computed columns, lands on the first field to fill, and marks what's required
+    h.key(KeyCode::Char('a'), KeyModifiers::NONE);
+    let Some(crate::app::overlay::Overlay::Insert(form)) = &h.app.overlay else { panic!("insert form") };
+    let names: Vec<_> = form.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["id", "email", "plan", "note"]);
+    assert_eq!(form.idx, 1, "starts on email, not the auto id");
+    assert!(form.fields[1].required() && !form.fields[0].required() && !form.fields[2].required());
+    assert_eq!(form.fields[0].default.as_deref(), Some("auto"));
+    assert_eq!(form.fields[2].default.as_deref(), Some("'free'"));
+    let scr = h.screen();
+    println!("{scr}");
+    assert!(scr.contains("insert · it_ins") && scr.contains("required") && scr.contains("'free'"), "{scr}");
+
+    // submitting without the required field points at it
+    h.key(KeyCode::Char('s'), KeyModifiers::CONTROL);
+    let Some(crate::app::overlay::Overlay::Insert(form)) = &h.app.overlay else { panic!("still open") };
+    assert_eq!(form.error.as_deref(), Some("email is required"));
+
+    // fill in, see the statement, insert; the new row shows at the top with the cursor on it
+    type_text(&mut h, "b@x.io");
+    h.key(KeyCode::Tab, KeyModifiers::NONE);
+    h.key(KeyCode::Tab, KeyModifiers::NONE);
+    type_text(&mut h, "hello");
+    let Some(crate::app::overlay::Overlay::Insert(form)) = &h.app.overlay else { panic!("insert form") };
+    assert_eq!(form.statement(), "insert into it_ins (email, note) values ('b@x.io', 'hello')");
+    h.key(KeyCode::Char('s'), KeyModifiers::CONTROL);
+    assert!(h.app.overlay.is_none());
+    h.settle().await;
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    assert_eq!(h.rows(), 2);
+    assert_eq!(h.cell(0, 1).as_deref(), Some("b@x.io"));
+    assert_eq!(h.cell(0, 2).as_deref(), Some("free"), "default applied");
+    assert_eq!(h.app.tab().view().unwrap().grid.row, 0);
+
+    // Ctrl+N cycles default → NULL → '' on a text field and shows in the statement
+    h.key(KeyCode::Char('a'), KeyModifiers::NONE);
+    type_text(&mut h, "c@x.io");
+    for _ in 0..2 {
+        h.key(KeyCode::Tab, KeyModifiers::NONE);
+    }
+    h.key(KeyCode::Char('n'), KeyModifiers::CONTROL);
+    h.key(KeyCode::Char('n'), KeyModifiers::CONTROL);
+    let Some(crate::app::overlay::Overlay::Insert(form)) = &h.app.overlay else { panic!("insert form") };
+    assert_eq!(form.statement(), "insert into it_ins (email, note) values ('c@x.io', '')");
+    h.key(KeyCode::Esc, KeyModifiers::NONE);
+    assert!(h.app.overlay.is_none());
+    assert_eq!(h.rows(), 2);
+
+    // duplicate copies values except the auto key; the unique email then fails and the form returns
+    h.app.tab_mut().view_mut().unwrap().grid.row = 0;
+    h.key(KeyCode::Char('A'), KeyModifiers::SHIFT);
+    let Some(crate::app::overlay::Overlay::Insert(form)) = &h.app.overlay else { panic!("insert form") };
+    assert_eq!(form.fields[1].input.text, "b@x.io");
+    assert_eq!(form.fields[0].input.text, "");
+    h.key(KeyCode::Char('s'), KeyModifiers::CONTROL);
+    h.settle().await;
+    let Some(crate::app::overlay::Overlay::Insert(form)) = &h.app.overlay else { panic!("form comes back after an error") };
+    assert!(form.error.as_deref().is_some_and(|e| e.to_lowercase().contains("unique")), "{:?}", form.error);
+    assert_eq!(form.fields[1].input.text, "b@x.io", "values survive");
+    assert_eq!(h.rows(), 2);
+
+    // fix the email and it goes through
+    h.key(KeyCode::Char('u'), KeyModifiers::CONTROL);
+    type_text(&mut h, "d@x.io");
+    h.key(KeyCode::Char('s'), KeyModifiers::CONTROL);
+    h.settle().await;
+    assert!(h.app.overlay.is_none(), "{}", h.screen());
+    assert_eq!(h.rows(), 3);
+    assert_eq!(h.cell(0, 1).as_deref(), Some("d@x.io"));
+    assert_eq!(h.cell(0, 3).as_deref(), Some("hello"), "duplicated note");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[tokio::test]
+async fn it_postgres_insert() {
+    let Some(mut h) = harness("ZDB_TEST_PG") else { return };
+    h.run_all(
+        "drop table if exists it_ins_pg;\
+         create table it_ins_pg (id serial primary key, uid bigint generated by default as identity, tag text not null, made timestamptz not null default now(), \
+         strict_id bigint generated always as identity, shout text generated always as (upper(tag)) stored, note text);",
+    )
+    .await;
+    assert!(h.errors().is_empty(), "{:?}", h.errors());
+    h.app.do_action(Action::RefreshSchema);
+    h.settle().await;
+    h.app.open_table("it_ins_pg", None);
+    h.settle().await;
+    h.app.focus = Focus::Results;
+    let cols = h.app.schema().unwrap().columns_of("it_ins_pg").to_vec();
+    let by = |n: &str| cols.iter().find(|c| c.name == n).unwrap().clone();
+    assert_eq!(by("id").default.as_deref(), Some("auto"), "serial");
+    assert_eq!(by("uid").default.as_deref(), Some("auto"), "identity by default");
+    assert_eq!(by("made").default.as_deref(), Some("now()"));
+    assert!(by("strict_id").generated && by("shout").generated);
+    assert_eq!(by("note").default, None);
+
+    h.key(KeyCode::Char('a'), KeyModifiers::NONE);
+    let Some(crate::app::overlay::Overlay::Insert(form)) = &h.app.overlay else { panic!("insert form") };
+    let names: Vec<_> = form.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["id", "uid", "tag", "made", "note"]);
+    assert_eq!(form.idx, 2);
+    type_text(&mut h, "it's");
+    h.key(KeyCode::Char('s'), KeyModifiers::CONTROL);
+    h.settle().await;
+    assert!(h.app.overlay.is_none(), "{}", h.screen());
+    assert_eq!(h.rows(), 1);
+    assert_eq!(h.cell(0, 2).as_deref(), Some("it's"));
+    assert_eq!(h.cell(0, 5).as_deref(), Some("IT'S"));
+    h.run("drop table it_ins_pg").await;
+}

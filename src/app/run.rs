@@ -225,7 +225,7 @@ impl App {
             let job = app.alloc_id();
             let env = app.key();
             let env_name = app.env.clone();
-            let silent = stmts.iter().all(|s| matches!(s.purpose, Purpose::Silent | Purpose::Commit | Purpose::Delete));
+            let silent = stmts.iter().all(|s| matches!(s.purpose, Purpose::Silent | Purpose::Commit | Purpose::Delete | Purpose::Insert));
             let t = &mut app.tabs[idx];
             if !silent {
                 t.results.clear();
@@ -459,6 +459,30 @@ impl App {
         rows.iter().map(|r| Ok(format!("delete from {q} where {}", pk_where(d, view, &pk, *r)?))).collect()
     }
 
+    /// After an insert: reload and show the new row, or bring the form back with the error.
+    fn finish_insert(&mut self, idx: usize, ok: bool) {
+        let Some(mut form) = self.insert_draft.take() else { return };
+        if ok {
+            self.toast(format!("Inserted 1 row into {}", form.table));
+            let t = &mut self.tabs[idx];
+            // the default order is newest first, so the new row is at the top
+            let default_order = t.table.as_ref().is_some_and(|x| x.sort.is_empty());
+            t.restore_cursor = t.results.first().map(|v| if default_order { (0, v.grid.col, 0) } else { (v.grid.row, v.grid.col, v.grid.top) });
+            self.refresh_table(idx);
+        } else if self.overlay.is_none() && self.tabs.get(self.cur).is_some_and(|t| t.id == form.tab_id) {
+            form.error = self.tabs[idx].last.as_ref().map(|(_, m)| m.clone());
+            self.overlay = Some(Overlay::Insert(Box::new(form)));
+        }
+    }
+
+    pub fn run_insert(&mut self, form: overlay::InsertForm) {
+        let sql = form.statement();
+        self.insert_draft = Some(form);
+        let stmt = JobStmt { exec: sql.clone(), orig: sql, offset: None, label: "insert".into(), cap: None, purpose: Purpose::Insert, server_sort: false };
+        let i = self.cur;
+        self.start_job(i, vec![stmt], false);
+    }
+
     pub fn run_delete(&mut self, stmts: Vec<String>) {
         let job: Vec<JobStmt> = stmts
             .into_iter()
@@ -650,7 +674,7 @@ impl App {
             JobEv::Start(i) => {
                 run.cur = i;
                 let stmt = run.stmts[i].clone();
-                if !matches!(stmt.purpose, Purpose::Silent | Purpose::Commit | Purpose::Delete) {
+                if !matches!(stmt.purpose, Purpose::Silent | Purpose::Commit | Purpose::Delete | Purpose::Insert) {
                     t.results.push(ResultView::new(stmt));
                 }
             }
@@ -767,6 +791,7 @@ impl App {
                 let run = t.run.take().unwrap();
                 let commit = run.stmts.iter().any(|s| s.purpose == Purpose::Commit);
                 let deleted = run.stmts.iter().filter(|s| s.purpose == Purpose::Delete).count();
+                let inserted = run.stmts.iter().any(|s| s.purpose == Purpose::Insert);
                 let ddl = run.stmts.iter().any(|s| { matches!(sql::classify(&s.exec).kind, Kind::Create | Kind::Alter | Kind::Drop)
                 });
                 if !run.any_error {
@@ -814,6 +839,9 @@ impl App {
                     let t = &mut self.tabs[idx];
                     t.restore_cursor = t.results.first().map(|v| (v.grid.row, v.grid.col, v.grid.top));
                     self.refresh_table(idx);
+                }
+                if inserted {
+                    self.finish_insert(idx, !run.any_error);
                 }
             }
         }

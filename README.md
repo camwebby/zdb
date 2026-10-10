@@ -178,6 +178,7 @@ Press `^B` for a sidebar of tables and saved queries. Press `⏎` on a row to op
 | `L` | Load all rows |
 | `f` / `F` | Filter chips |
 | `e` / `u` | Edit cell / undo edit |
+| `a` / `A` | Insert a row / insert a copy of this row (form with defaults, required fields and a live `INSERT` preview) |
 | `D` | Delete the row (or selected rows) after confirming, in table tabs with a primary key |
 | `gd` | Follow foreign key |
 | `[` `]` | Previous / next result |

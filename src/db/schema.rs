@@ -34,6 +34,11 @@ pub struct ColInfo {
     pub pk: bool,
     /// (referenced table display name, referenced column)
     pub fk: Option<(String, String)>,
+    /// What the database fills in when the column is omitted from an INSERT: the default
+    /// expression, or "auto" for serial, identity, auto_increment and rowid columns.
+    pub default: Option<String>,
+    /// Computed by the database, so it can't be written.
+    pub generated: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -56,6 +61,32 @@ impl Schema {
     }
     pub fn primary_key(&self, name: &str) -> Vec<String> {
         self.columns_of(name).iter().filter(|c| c.pk).map(|c| c.name.clone()).collect()
+    }
+}
+
+/// (schema, table, column, default expression, identity/auto flag, generated flag) for every
+/// column that has a default or is computed.
+fn defaults_query(d: DriverKind) -> &'static str {
+    match d {
+        DriverKind::Postgres => {
+            "select n.nspname, c.relname, a.attname, pg_get_expr(d.adbin, d.adrelid), a.attidentity::text, a.attgenerated::text
+             from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace
+             left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+             where a.attnum > 0 and not a.attisdropped and c.relkind in ('r','v','m','p','f')
+               and n.nspname not in ('pg_catalog','information_schema') and n.nspname not like 'pg_toast%'
+               and (d.adbin is not null or a.attidentity::text <> '' or a.attgenerated::text <> '')"
+        }
+        DriverKind::Mysql => {
+            "select '', table_name, column_name, column_default,
+                    case when extra like '%auto_increment%' then 'd' else '' end,
+                    case when extra like '%VIRTUAL%' or extra like '%STORED%' then 's' else '' end
+             from information_schema.columns where table_schema = database()"
+        }
+        DriverKind::Sqlite => {
+            "select '', s.name, p.name, p.dflt_value, '', case when p.hidden in (2, 3) then 's' else '' end
+             from sqlite_schema s, pragma_table_xinfo(s.name) p
+             where s.type in ('table','view') and s.name not like 'sqlite_%' and p.hidden != 1"
+        }
     }
 }
 
@@ -125,6 +156,8 @@ pub async fn load(sess: &mut Session) -> Result<Schema, DbError> {
             nullable: s(&r[4]) == "true",
             pk: false,
             fk: None,
+            default: None,
+            generated: false,
         });
     }
     for r in sess.rows(pk_q).await? {
@@ -132,6 +165,31 @@ pub async fn load(sess: &mut Session) -> Result<Schema, DbError> {
             && let Some(c) = cols.iter_mut().find(|c| c.name == s(&r[2])) {
                 c.pk = true;
             }
+    }
+    // Defaults only sharpen the insert form, so a server that rejects this query (older
+    // Postgres lacks attgenerated, say) must not break schema loading.
+    if let Ok(rows) = sess.rows(defaults_query(d)).await {
+        for r in rows {
+            let Some(cols) = schema.columns.get_mut(&disp(&s(&r[0]), &s(&r[1]))) else { continue };
+            let Some(c) = cols.iter_mut().find(|c| c.name == s(&r[2])) else { continue };
+            let (identity, generated) = (s(&r[4]), s(&r[5]));
+            c.generated = !generated.is_empty() || identity == "a";
+            c.default = match (&r[3], identity.is_empty()) {
+                (_, false) => Some("auto".into()),
+                (Some(e), _) if e.starts_with("nextval(") => Some("auto".into()),
+                (Some(e), _) => Some(e.clone()),
+                (None, _) => None,
+            };
+        }
+    }
+    if d == DriverKind::Sqlite {
+        // a lone INTEGER primary key is the rowid, which SQLite fills in itself
+        for cols in schema.columns.values_mut() {
+            if cols.iter().filter(|c| c.pk).count() == 1
+                && let Some(c) = cols.iter_mut().find(|c| c.pk && c.type_name.eq_ignore_ascii_case("integer") && c.default.is_none()) {
+                    c.default = Some("auto".into());
+                }
+        }
     }
     for r in sess.rows(fk_q).await? {
         if let Some(cols) = schema.columns.get_mut(&disp(&s(&r[0]), &s(&r[1])))

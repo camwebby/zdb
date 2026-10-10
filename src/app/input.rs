@@ -31,6 +31,7 @@ impl App {
                 Overlay::Params(f) => self.params_key(f, k),
                 Overlay::Form(f) => self.form_key(f, k),
                 Overlay::Review(r) => self.review_key(r, k),
+                Overlay::Insert(f) => self.insert_key(*f, k),
             }
             return;
         }
@@ -502,6 +503,8 @@ impl App {
                 }
             }
             EditCell => self.edit_cell(),
+            InsertRow => self.open_insert(false),
+            DuplicateRow => self.open_insert(true),
             DeleteRow => self.delete_rows(),
             UndoEdit => {
                 let t = self.tab_mut();
@@ -1038,6 +1041,86 @@ impl App {
         );
     }
 
+    /// Open the insert form for the current table, blank or prefilled from the cursor row.
+    fn open_insert(&mut self, duplicate: bool) {
+        let Some(t) = self.tab().table.clone() else {
+            self.toast("inserting works in table tabs · ^P opens one");
+            return;
+        };
+        if t.structure {
+            return;
+        }
+        if self.read_only() {
+            self.toast_err(format!("{} is read-only · Space c w allows writes", self.env));
+            return;
+        }
+        let Some(schema) = self.schema() else {
+            self.toast("loading schema…");
+            return;
+        };
+        let Some(info) = schema.table(&t.name).cloned() else { return };
+        if info.kind == crate::db::schema::TableKind::View {
+            self.toast(format!("{} is a view, so it can't take new rows", t.name));
+            return;
+        }
+        let Some(v) = self.tab().results.first().filter(|v| matches!(v.body, ResultBody::Grid) && !v.rs.cols.is_empty()) else { return };
+        if duplicate && v.rs.rows == 0 {
+            self.toast("no row to duplicate");
+            return;
+        }
+        let infos = schema.columns_of(&t.name);
+        let fields: Vec<overlay::InsertField> = v
+            .rs
+            .cols
+            .iter()
+            .enumerate()
+            .filter_map(|(ci, c)| {
+                let info = infos.iter().find(|x| x.name == c.name);
+                if info.is_some_and(|x| x.generated) {
+                    return None;
+                }
+                let auto = info.is_some_and(|x| x.pk || x.default.as_deref() == Some("auto"));
+                let mut f = overlay::InsertField {
+                    name: c.name.clone(),
+                    type_name: info.map(|x| x.type_name.clone()).unwrap_or_else(|| c.type_name.clone()),
+                    kind: c.kind,
+                    pk: info.is_some_and(|x| x.pk),
+                    fk: info.and_then(|x| x.fk.as_ref()).map(|(t, c)| format!("{t}.{c}")),
+                    nullable: info.is_none_or(|x| x.nullable),
+                    default: info.and_then(|x| x.default.clone()),
+                    input: LineInput::default(),
+                    blank: overlay::Blank::Default,
+                };
+                // a copy keeps every value except the ones the database should hand out afresh
+                if duplicate && !auto {
+                    match v.grid.cell_value(&v.rs, v.grid.row, ci) {
+                        Some(val) => f.input.set(val),
+                        None => f.blank = overlay::Blank::Null,
+                    }
+                }
+                Some(f)
+            })
+            .collect();
+        if fields.is_empty() {
+            self.toast(format!("{} has no writable columns", t.name));
+            return;
+        }
+        // land on the first field the user actually has to fill in
+        let idx = fields.iter().position(|f| f.default.as_deref() != Some("auto")).unwrap_or(0);
+        let d = self.driver();
+        let form = overlay::InsertForm {
+            tab_id: self.tab().id,
+            table: t.name.clone(),
+            quoted: crate::db::quote_qualified(d, &info.schema, &info.name),
+            driver: d,
+            fields,
+            idx,
+            scroll: std::cell::Cell::new(0),
+            error: None,
+        };
+        self.overlay = Some(Overlay::Insert(Box::new(form)));
+    }
+
     /// Delete the row under the cursor, or every selected row, after a confirmation.
     fn delete_rows(&mut self) {
         let Some(t) = self.tab().table.clone() else {
@@ -1549,6 +1632,8 @@ fn describe(a: Action) -> &'static str {
         ClearFilters => "clear filters",
         EditCell => "edit cell (table tabs with a primary key)",
         UndoEdit => "undo last staged edit",
+        InsertRow => "insert a row (table tabs)",
+        DuplicateRow => "insert a copy of this row",
         DeleteRow => "delete row, or selected rows (table tabs with a primary key)",
         NextResult => "next result",
         PrevResult => "previous result",
@@ -1650,6 +1735,11 @@ impl App {
             Some(Overlay::Params(f)) => {
                 let i = f.idx;
                 f.values[i].insert(&s);
+            }
+            Some(Overlay::Insert(f)) => {
+                let i = f.idx;
+                f.fields[i].input.insert(&s);
+                f.fields[i].blank = overlay::Blank::Default;
             }
             Some(Overlay::Form(f)) => {
                 let i = f.focus;

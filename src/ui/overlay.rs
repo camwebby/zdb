@@ -23,6 +23,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         Overlay::Params(p) => params(f, app, area, p),
         Overlay::Form(c) => form(f, app, area, c),
         Overlay::Review(r) => review(f, app, area, r),
+        Overlay::Insert(i) => insert(f, app, area, i),
     }
     app.overlay = Some(o);
 }
@@ -257,6 +258,95 @@ fn params(f: &mut Frame, app: &App, area: Rect, p: &ParamForm) {
         }
     }
     footer(f, inner, &format!("tab next · {} run · values are SQL literals unless numeric · esc", app.glyphs.enter));
+}
+
+fn insert(f: &mut Frame, app: &App, area: Rect, form: &InsertForm) {
+    let t = &app.theme;
+    let prod = app.level() == Level::Prod;
+    let n = form.fields.len();
+    let list_h = n.min((area.height as usize).saturating_sub(10).max(3));
+    let r = centered(area, 86, list_h as u16 + 7 + form.error.is_some() as u16);
+    let title = format!("insert · {}", form.table);
+    let inner = if prod {
+        use ratatui::widgets::{Block, BorderType, Borders, Clear};
+        let st = Style::default().fg(t.prod);
+        let b = Block::default().borders(Borders::ALL).border_type(BorderType::Thick).border_style(st).title(Span::styled(format!(" {title} "), st.add_modifier(Modifier::BOLD)));
+        let inner = b.inner(r);
+        f.render_widget(Clear, r);
+        f.render_widget(b, r);
+        inner
+    } else {
+        framed(f, t, r, &title, true)
+    };
+    let w = inner.width as usize;
+    let target_style = if prod { Style::default().fg(t.prod).add_modifier(Modifier::BOLD) } else { Style::default().add_modifier(Modifier::BOLD) };
+    f.buffer_mut().set_stringn(inner.x + 1, inner.y, format!("{} · {}", app.project, app.env), w.saturating_sub(12), target_style);
+    if n > list_h {
+        let pos = format!("{}/{n}", form.idx + 1);
+        f.buffer_mut().set_string(inner.right().saturating_sub(pos.len() as u16 + 1), inner.y, pos, dim());
+    }
+    // keep the focused field in view without jumping around
+    let mut top = form.scroll.get().min(n - list_h);
+    if form.idx < top {
+        top = form.idx;
+    } else if form.idx >= top + list_h {
+        top = form.idx + 1 - list_h;
+    }
+    form.scroll.set(top);
+    let nw = form.fields.iter().map(|x| x.name.width()).max().unwrap_or(4).min(24) as u16;
+    let tw = 20u16.min(inner.width / 4);
+    let vx = inner.x + 4 + nw + 1;
+    let vw = inner.width.saturating_sub(vx - inner.x + tw + 2) as usize;
+    for (row, (i, fld)) in form.fields.iter().enumerate().skip(top).take(list_h).enumerate() {
+        let y = inner.y + 1 + row as u16;
+        let focused = i == form.idx;
+        let name_style = if focused { Style::default().fg(t.accent).add_modifier(Modifier::BOLD) } else { Style::default() };
+        if fld.required() {
+            f.buffer_mut().set_string(inner.x + 1, y, "*", Style::default().fg(t.error));
+        }
+        f.buffer_mut().set_string(inner.x + 3, y, pad(&trunc(&fld.name, nw as usize, "…"), nw as usize), name_style);
+        // empty fields show what leaving them empty will do
+        let placeholder = match fld.blank {
+            Blank::Null => Some(("NULL".to_string(), Style::default().fg(t.accent).add_modifier(Modifier::ITALIC))),
+            Blank::EmptyString => Some(("'' (empty string)".to_string(), Style::default().fg(t.accent).add_modifier(Modifier::ITALIC))),
+            Blank::Default => match (&fld.default, fld.nullable) {
+                (Some(d), _) => Some((d.clone(), dim().add_modifier(Modifier::ITALIC))),
+                (None, true) => Some(("NULL".to_string(), dim().add_modifier(Modifier::ITALIC))),
+                (None, false) => Some(("required".to_string(), Style::default().fg(t.error).add_modifier(Modifier::ITALIC))),
+            },
+        };
+        if fld.input.text.is_empty() {
+            if let Some((text, st)) = placeholder {
+                f.buffer_mut().set_stringn(vx, y, trunc(&text, vw, "…"), vw, st);
+            }
+        } else {
+            let (spans, _) = input_spans(&fld.input, false, vw, Style::default());
+            f.buffer_mut().set_line(vx, y, &Line::from(spans), vw as u16);
+        }
+        if focused {
+            let (_, cx) = input_spans(&fld.input, false, vw, Style::default());
+            f.set_cursor_position((vx + cx, y));
+        }
+        let mut tag = fld.type_name.clone();
+        if fld.pk {
+            tag.push_str(" · pk");
+        }
+        if let Some(fk) = &fld.fk {
+            tag = format!("→ {fk}");
+        }
+        let tag = trunc(&tag, tw as usize, "…");
+        f.buffer_mut().set_string(inner.right().saturating_sub(tag.width() as u16 + 1), y, &tag, dim());
+    }
+    // the statement that will run, so there are no surprises
+    let sql = form.statement();
+    let preview_y = inner.y + 2 + list_h as u16;
+    for (k, line) in super::wrap_width(&sql, w.saturating_sub(3)).iter().take(2).enumerate() {
+        f.buffer_mut().set_stringn(inner.x + 2, preview_y + k as u16, line, w.saturating_sub(2), Style::default().fg(t.keyword));
+    }
+    if let Some(e) = &form.error {
+        f.buffer_mut().set_stringn(inner.x + 1, preview_y + 2, format!("{} {e}", app.glyphs.cross), w.saturating_sub(1), Style::default().fg(t.error));
+    }
+    footer(f, inner, &format!("tab next · ^N null · ^S insert · {} insert on last field · esc cancel", app.glyphs.enter));
 }
 
 fn form(f: &mut Frame, app: &App, area: Rect, c: &ConnForm) {

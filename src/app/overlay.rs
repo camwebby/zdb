@@ -580,6 +580,51 @@ impl App {
         self.overlay = Some(Overlay::Params(f));
     }
 
+    // ---------------- insert ----------------
+
+    pub fn insert_key(&mut self, mut f: InsertForm, k: KeyEvent) {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let n = f.fields.len();
+        f.error = None;
+        match k.code {
+            KeyCode::Esc => return,
+            KeyCode::Char('c') if ctrl => return,
+            KeyCode::Char('s') if ctrl => return self.submit_insert(f),
+            KeyCode::Enter if f.idx + 1 == n => return self.submit_insert(f),
+            KeyCode::Enter | KeyCode::Tab | KeyCode::Down => f.idx = (f.idx + 1) % n,
+            KeyCode::BackTab | KeyCode::Up => f.idx = (f.idx + n - 1) % n,
+            KeyCode::Char('n') if ctrl => f.fields[f.idx].cycle_blank(),
+            _ => {
+                let field = &mut f.fields[f.idx];
+                if field.input.handle(&k) && !field.input.text.is_empty() {
+                    field.blank = Blank::Default;
+                }
+            }
+        }
+        self.overlay = Some(Overlay::Insert(Box::new(f)));
+    }
+
+    fn submit_insert(&mut self, mut f: InsertForm) {
+        if let Some(i) = f.missing() {
+            f.error = Some(format!("{} is required", f.fields[i].name));
+            f.idx = i;
+            self.overlay = Some(Overlay::Insert(Box::new(f)));
+            return;
+        }
+        // production asks for the environment name, like every other write
+        if self.level() == Level::Prod {
+            let back = f.clone();
+            let body = format!("this inserts a row into {}", f.table);
+            let sql = format!("{};", f.statement());
+            self.confirm("Insert", body, sql, Some(self.env.clone()), Box::new(move |app: &mut App| app.run_insert(f)));
+            if let Some(Overlay::Confirm(c)) = &mut self.overlay {
+                c.on_cancel = Some(Box::new(move |app: &mut App| app.overlay = Some(Overlay::Insert(Box::new(back)))));
+            }
+            return;
+        }
+        self.run_insert(f);
+    }
+
     // ---------------- review ----------------
 
     pub fn review_key(&mut self, mut r: Review, k: KeyEvent) {
@@ -872,6 +917,7 @@ pub enum Overlay {
     Params(ParamForm),
     Form(Box<ConnForm>),
     Review(Review),
+    Insert(Box<InsertForm>),
 }
 
 pub struct Help {
@@ -960,6 +1006,98 @@ pub type ParamsThen = Box<dyn FnOnce(&mut App, BTreeMap<String, String>)>;
 impl ParamForm {
     pub fn new(names: Vec<String>, values: Vec<String>, then: ParamsThen) -> ParamForm {
         ParamForm { names, values: values.iter().map(|v| LineInput::new(v)).collect(), idx: 0, then: Some(then) }
+    }
+}
+
+/// What an empty insert field means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Blank {
+    /// Leave the column out so the database fills it in.
+    Default,
+    Null,
+    EmptyString,
+}
+
+#[derive(Debug, Clone)]
+pub struct InsertField {
+    pub name: String,
+    pub type_name: String,
+    pub kind: crate::db::ColKind,
+    pub pk: bool,
+    /// Referenced `table.column`.
+    pub fk: Option<String>,
+    pub nullable: bool,
+    pub default: Option<String>,
+    pub input: LineInput,
+    pub blank: Blank,
+}
+
+impl InsertField {
+    /// Not null with nothing to fall back on, so the user has to supply a value.
+    pub fn required(&self) -> bool {
+        !self.nullable && self.default.is_none()
+    }
+
+    /// `None` leaves the column out of the INSERT, `Some(None)` writes NULL.
+    pub fn value(&self) -> Option<Option<String>> {
+        if !self.input.text.is_empty() {
+            return Some(Some(self.input.text.clone()));
+        }
+        match self.blank {
+            Blank::Default => None,
+            Blank::Null => Some(None),
+            Blank::EmptyString => Some(Some(String::new())),
+        }
+    }
+
+    /// Ctrl+N: step an empty field through default → NULL → '' (text columns only).
+    fn cycle_blank(&mut self) {
+        let text = self.kind == crate::db::ColKind::Text;
+        if !self.input.text.is_empty() {
+            self.input.set("");
+            self.blank = Blank::Null;
+            return;
+        }
+        self.blank = match self.blank {
+            Blank::Default => Blank::Null,
+            Blank::Null if text => Blank::EmptyString,
+            _ => Blank::Default,
+        };
+    }
+}
+
+#[derive(Clone)]
+pub struct InsertForm {
+    pub tab_id: u64,
+    pub table: String,
+    pub quoted: String,
+    pub driver: crate::config::DriverKind,
+    pub fields: Vec<InsertField>,
+    pub idx: usize,
+    pub scroll: std::cell::Cell<usize>,
+    pub error: Option<String>,
+}
+
+impl InsertForm {
+    pub fn statement(&self) -> String {
+        let d = self.driver;
+        let (mut cols, mut vals) = (Vec::new(), Vec::new());
+        for f in &self.fields {
+            if let Some(v) = f.value() {
+                cols.push(crate::db::quote_ident(d, &f.name));
+                vals.push(crate::db::literal(d, f.kind, v.as_deref()));
+            }
+        }
+        match (cols.is_empty(), d) {
+            (true, crate::config::DriverKind::Mysql) => format!("insert into {} () values ()", self.quoted),
+            (true, _) => format!("insert into {} default values", self.quoted),
+            _ => format!("insert into {} ({}) values ({})", self.quoted, cols.join(", "), vals.join(", ")),
+        }
+    }
+
+    /// The first required field that has no value.
+    pub fn missing(&self) -> Option<usize> {
+        self.fields.iter().position(|f| f.required() && !matches!(f.value(), Some(Some(_))))
     }
 }
 
