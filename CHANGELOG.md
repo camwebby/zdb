@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 - Make selecting and moving through long queries faster in the editor: drag, `⇧`-click, double-click (word), triple-click (line) and the line numbers select text with the mouse; `^L` selects the current line and extends by a line each press; `M-⇧↑`/`M-⇧↓` move the selected lines; `⇧PgUp`/`⇧PgDn` extend the selection, and `PgUp`/`PgDn` now scroll a screen at a time, keeping the cursor on its row. Holding a drag above or below the editor keeps scrolling it.
 - Fix the mouse wheel in the editor snapping back to the cursor: it now scrolls the view alone, and the view follows the cursor again only when the cursor moves.
