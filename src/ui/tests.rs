@@ -191,6 +191,97 @@ async fn plan_view() {
 }
 
 #[tokio::test]
+async fn mouse_selects_in_the_editor() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mut a = app();
+    a.add_query_tab(None, "select a, b\nfrom users\nwhere id = 1\norder by a");
+    render(&mut a, 100, 30);
+    let e = a.layout.editor;
+    let tx = e.x + a.layout.gutter;
+    let ev = |a: &mut App, kind, x: u16, y: u16, modifiers| a.on_mouse(MouseEvent { kind, column: x, row: y, modifiers });
+    let none = KeyModifiers::NONE;
+    let sel = |a: &App| a.tab().editor.selected_text();
+
+    // drag selects text
+    ev(&mut a, MouseEventKind::Down(MouseButton::Left), tx + 2, e.y, none);
+    ev(&mut a, MouseEventKind::Drag(MouseButton::Left), tx + 8, e.y + 1, none);
+    ev(&mut a, MouseEventKind::Up(MouseButton::Left), tx + 8, e.y + 1, none);
+    assert_eq!(sel(&a).as_deref(), Some("lect a, b\nfrom use"));
+    a.last_click = None;
+
+    // shift-click extends it
+    ev(&mut a, MouseEventKind::Down(MouseButton::Left), tx + 3, e.y + 2, KeyModifiers::SHIFT);
+    ev(&mut a, MouseEventKind::Up(MouseButton::Left), tx + 3, e.y + 2, KeyModifiers::SHIFT);
+    assert_eq!(sel(&a).as_deref(), Some("lect a, b\nfrom users\nwhe"));
+    a.last_click = None;
+
+    // double click picks a word, triple click the line
+    for n in 1..=3 {
+        ev(&mut a, MouseEventKind::Down(MouseButton::Left), tx + 7, e.y + 1, none);
+        ev(&mut a, MouseEventKind::Up(MouseButton::Left), tx + 7, e.y + 1, none);
+        match n {
+            1 => assert_eq!(sel(&a), None),
+            2 => assert_eq!(sel(&a).as_deref(), Some("users")),
+            _ => assert_eq!(sel(&a).as_deref(), Some("from users\n")),
+        }
+    }
+    a.last_click = None;
+
+    // line numbers select lines, and dragging down them takes more
+    ev(&mut a, MouseEventKind::Down(MouseButton::Left), e.x, e.y + 1, none);
+    assert_eq!(sel(&a).as_deref(), Some("from users\n"));
+    ev(&mut a, MouseEventKind::Drag(MouseButton::Left), e.x, e.y + 2, none);
+    ev(&mut a, MouseEventKind::Up(MouseButton::Left), e.x, e.y + 2, none);
+    assert_eq!(sel(&a).as_deref(), Some("from users\nwhere id = 1\n"));
+    assert_eq!(a.focus, Focus::Editor);
+}
+
+#[tokio::test]
+async fn editor_view_scrolls_on_its_own_terms() {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let text: String = (1..=100).map(|n| format!("line {n}\n")).collect();
+    let mut a = app();
+    a.add_query_tab(None, text.trim_end());
+    render(&mut a, 100, 30);
+    let e = a.layout.editor;
+    let ev = |a: &mut App, kind, x: u16, y: u16| a.on_mouse(MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE });
+    a.tab_mut().editor.set_cursor(0, 0);
+    render(&mut a, 100, 30);
+
+    // the wheel scrolls away from the cursor and the next frame leaves it there
+    ev(&mut a, MouseEventKind::ScrollDown, e.x + 10, e.y + 2);
+    ev(&mut a, MouseEventKind::ScrollDown, e.x + 10, e.y + 2);
+    let screen = render(&mut a, 100, 30);
+    assert_eq!(a.tab().editor.scroll, 6);
+    assert_eq!(a.tab().editor.cursor(), (0, 0), "the cursor stays where it was");
+    assert!(screen.contains("line 7") && !screen.contains("line 1\n"), "{screen}");
+    render(&mut a, 100, 30);
+    assert_eq!(a.tab().editor.scroll, 6, "redrawing doesn't snap back");
+
+    // typing brings the cursor back into view
+    a.tab_mut().editor.insert_str("x");
+    render(&mut a, 100, 30);
+    assert_eq!(a.tab().editor.scroll, 0);
+
+    // a drag held below the editor keeps scrolling and extending the selection
+    let rows = a.tab().editor.view_rows;
+    let (x, below) = (e.x + a.layout.gutter + 2, e.y + rows as u16 + 2);
+    ev(&mut a, MouseEventKind::Down(MouseButton::Left), x, e.y);
+    ev(&mut a, MouseEventKind::Drag(MouseButton::Left), x, below);
+    assert_eq!(a.tab().editor.scroll, 0, "scrolling waits for the timer");
+    for _ in 0..5 {
+        a.drag_scrolled = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        a.autoscroll_drag();
+        render(&mut a, 100, 30);
+    }
+    assert!(a.tab().editor.scroll >= 5, "scrolled {}", a.tab().editor.scroll);
+    let end = a.tab().editor.cursor().0;
+    assert_eq!(end, a.tab().editor.scroll + rows - 1, "the selection follows the mouse to the last row on screen");
+    ev(&mut a, MouseEventKind::Up(MouseButton::Left), x, below);
+    assert!(a.editor_drag_scroll().is_none());
+}
+
+#[tokio::test]
 async fn mouse_clicks_hit_what_was_drawn() {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let mut a = app();

@@ -61,6 +61,7 @@ pub enum Msg {
     Count { table: String, res: Result<String, String> },
     Export(ExportEv),
     Test { res: Result<String, String> },
+    ConnTest { label: String, res: Result<String, String>, ms: u64 },
 }
 
 pub enum JobEv {
@@ -410,6 +411,11 @@ pub struct App {
     pub spinner: usize,
     pub test_result: Option<Result<String, String>>,
     pub last_click: Option<(Instant, u16, u16)>,
+    /// Clicks in a row on the same cell, capped at 3 (word, then line, selection in the editor).
+    pub clicks: u8,
+    /// Where the mouse last was during an editor drag, and when that drag last auto-scrolled.
+    pub drag_at: Option<(u16, u16)>,
+    pub drag_scrolled: Instant,
     pub quit_after_save: bool,
     pub quit_confirmed_edits: bool,
     /// The insert form that was just submitted, reopened with its values if the insert fails.
@@ -421,10 +427,17 @@ pub struct App {
 /// Column sort plus the cursor (row, col) to restore.
 pub type PendingSort = (Vec<(usize, bool)>, (usize, usize));
 
+/// How often a drag held above or below the editor scrolls it.
+const AUTOSCROLL: Duration = Duration::from_millis(40);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Drag {
     Split,
     Grid,
+    /// Selecting text in the editor.
+    Editor,
+    /// Selecting whole lines in the editor, from the row where the drag began.
+    EditorLines(usize),
 }
 
 /// Work that needs the terminal released (an external editor).
@@ -484,6 +497,9 @@ impl App {
             spinner: 0,
             test_result: None,
             last_click: None,
+            clicks: 0,
+            drag_at: None,
+            drag_scrolled: Instant::now(),
             quit_after_save: false,
             quit_confirmed_edits: false,
             insert_draft: None,
@@ -750,6 +766,9 @@ impl App {
                 take(reveal - now);
             }
         }
+        if self.editor_drag_scroll().is_some() {
+            take(AUTOSCROLL);
+        }
         if self.tabs.iter().any(|t| t.run.is_some()) || self.export.is_some() || self.schemas.values().any(|s| matches!(s, SchemaState::Loading)) {
             take(Duration::from_millis(100));
         }
@@ -768,6 +787,7 @@ impl App {
             self.toast = None;
         }
         self.spinner = self.spinner.wrapping_add(1);
+        self.autoscroll_drag();
         let key = self.key();
         if let Some(t) = self.unlocked.get(&key)
             && t.elapsed() >= Duration::from_secs(self.settings.prod_unlock_idle_minutes * 60) {

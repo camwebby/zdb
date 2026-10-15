@@ -539,6 +539,7 @@ impl App {
             }
             NewConnection => self.open_conn_form(false),
             EditConnection => self.open_conn_form(true),
+            TestConnection => self.test_connection(),
             AllowWrites => self.toggle_writes(),
             RefreshSchema => {
                 let k = self.key();
@@ -1368,6 +1369,61 @@ impl App {
 
     // ---------------- mouse ----------------
 
+    /// Editor (row, col) under a screen position; above or below the text it is the first or
+    /// last row on screen.
+    fn editor_pos(&self, x: u16, y: u16) -> (usize, usize) {
+        let (l, ed) = (&self.layout, &self.tab().editor);
+        let last = ed.view_rows.saturating_sub(1) as isize;
+        let row = (y as isize - l.editor.y as isize).clamp(0, last) as usize + ed.scroll;
+        let col = x.saturating_sub(l.editor.x + l.gutter) as usize + ed.hscroll;
+        (row, col)
+    }
+
+    /// Extend the editor selection a drag has made to a screen position.
+    fn drag_editor(&mut self, x: u16, y: u16) {
+        let (row, col) = self.editor_pos(x, y);
+        let drag = self.drag;
+        let ed = &mut self.tab_mut().editor;
+        match drag {
+            Some(Drag::Editor) => ed.drag_to(row, col),
+            Some(Drag::EditorLines(from)) => ed.select_lines(from, row),
+            _ => {}
+        }
+    }
+
+    /// Rows to scroll while an editor drag is held above (negative) or below the text; more the
+    /// further out the mouse is. None when there is no such drag.
+    pub fn editor_drag_scroll(&self) -> Option<isize> {
+        let (Some((_, y)), Some(Drag::Editor | Drag::EditorLines(_))) = (self.drag_at, self.drag) else { return None };
+        let top = self.layout.editor.y;
+        let bottom = top + self.tab().editor.view_rows as u16;
+        if y < top {
+            Some(-((top - y) as isize).min(3))
+        } else if y >= bottom {
+            Some(((y - bottom) as isize + 1).min(3))
+        } else {
+            None
+        }
+    }
+
+    /// Keep an editor drag scrolling while the mouse is held outside the text. Terminals only
+    /// report a drag when the mouse moves, so this runs from the timer.
+    pub fn autoscroll_drag(&mut self) {
+        let Some(delta) = self.editor_drag_scroll() else { return };
+        if self.drag_scrolled.elapsed() < AUTOSCROLL {
+            return;
+        }
+        self.drag_scrolled = Instant::now();
+        let ed = &mut self.tab_mut().editor;
+        // no scrolling on once the end of the text is showing
+        if delta < 0 || ed.scroll + ed.view_rows < ed.lines.len() {
+            ed.scroll_by(delta);
+        }
+        if let Some((x, y)) = self.drag_at {
+            self.drag_editor(x, y);
+        }
+    }
+
     pub fn on_mouse(&mut self, m: MouseEvent) {
         if !self.settings.mouse {
             return;
@@ -1388,6 +1444,7 @@ impl App {
                 let double = self.last_click.is_some_and(|(t, cx, cy)| { t.elapsed() < Duration::from_millis(400) && cx == x && cy == y
                 });
                 self.last_click = Some((Instant::now(), x, y));
+                self.clicks = if double { (self.clicks + 1).min(3) } else { 1 };
                 let l = self.layout.clone();
                 if inside(l.top) {
                     if x >= l.env_span.0 && x < l.env_span.1 {
@@ -1414,12 +1471,25 @@ impl App {
                 } else if inside(l.editor) {
                     if self.tab().editor_visible() {
                         self.focus = Focus::Editor;
-                        let t = self.tab_mut();
-                        let row = (y - l.editor.y) as usize + t.editor.scroll;
-                        let col = (x.saturating_sub(l.editor.x + l.gutter)) as usize + t.editor.hscroll;
-                        t.editor.anchor = None;
-                        t.editor.set_cursor(row, col);
                         self.complete = None;
+                        let (row, col) = self.editor_pos(x, y);
+                        let (in_gutter, shift, clicks) = (x < l.editor.x + l.gutter, m.modifiers.contains(KeyModifiers::SHIFT), self.clicks);
+                        let ed = &mut self.tab_mut().editor;
+                        // a click on the line numbers, or a triple click, takes whole lines
+                        self.drag = if in_gutter || clicks >= 3 {
+                            ed.select_lines(row, row);
+                            Some(Drag::EditorLines(row))
+                        } else if shift {
+                            ed.drag_to(row, col);
+                            Some(Drag::Editor)
+                        } else if clicks == 2 {
+                            ed.select_word_at(row, col);
+                            Some(Drag::Editor)
+                        } else {
+                            ed.anchor = None;
+                            ed.set_cursor(row, col);
+                            Some(Drag::Editor)
+                        };
                     }
                 } else if inside(l.results_rule) {
                     if let Some((i, _, _)) = l.result_spans.iter().find(|(_, a, b)| x >= *a && x < *b) {
@@ -1452,6 +1522,10 @@ impl App {
                             v.grid.col = c;
                         }
                 }
+                Some(Drag::Editor | Drag::EditorLines(_)) => {
+                    self.drag_at = Some((x, y));
+                    self.drag_editor(x, y);
+                }
                 None => {}
             },
             MouseEventKind::Up(_) => self.drag = None,
@@ -1459,9 +1533,7 @@ impl App {
                 let d: isize = if m.kind == MouseEventKind::ScrollDown { 3 } else { -3 };
                 let l = self.layout.clone();
                 if inside(l.editor) && self.tab().editor_visible() {
-                    let t = self.tab_mut();
-                    let max = t.editor.lines.len().saturating_sub(1);
-                    t.editor.scroll = (t.editor.scroll as isize + d).clamp(0, max as isize) as usize;
+                    self.tab_mut().editor.scroll_by(d);
                 } else if inside(l.sidebar) {
                     let n = self.sidebar_items().len();
                     self.sidebar.sel = (self.sidebar.sel as isize + d).clamp(0, n.saturating_sub(1) as isize) as usize;
@@ -1669,7 +1741,11 @@ pub fn help_entries(app: &App, focus: Option<Focus>) -> Vec<(String, String, Str
         ("arrows home end", "move"),
         ("^A", "line start"),
         ("M-b M-f", "word left / right"),
-        ("shift+arrows", "select"),
+        ("shift+arrows pgup pgdn", "select"),
+        ("^L", "select line (again for more)"),
+        ("M-shift+↑ ↓", "move line(s) up / down"),
+        ("click number", "select line"),
+        ("drag · dbl-click · triple", "select text · word · line"),
         ("^Z ^Y", "undo / redo"),
         ("M-c M-x M-v", "copy / cut / paste selection"),
         ("tab", "accept completion"),

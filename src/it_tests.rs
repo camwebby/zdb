@@ -547,3 +547,28 @@ async fn it_postgres_insert() {
     assert_eq!(h.cell(0, 5).as_deref(), Some("IT'S"));
     h.run("drop table it_ins_pg").await;
 }
+
+#[tokio::test]
+async fn it_sqlite_test_connection() {
+    let path = std::env::temp_dir().join(format!("zdb-it-conntest-{}.db", std::process::id()));
+    std::fs::File::create(&path).unwrap();
+    unsafe { std::env::set_var("ZDB_TEST_SQLITE_CONNTEST", format!("sqlite://{}", path.display())) };
+    let mut h = harness("ZDB_TEST_SQLITE_CONNTEST").unwrap();
+
+    async fn toast_after_test(h: &mut H) -> (String, bool) {
+        h.app.do_action(Action::TestConnection);
+        assert!(h.app.toast.as_ref().unwrap().text.starts_with("testing it · local"));
+        let m = tokio::time::timeout(Duration::from_secs(10), h.rx.recv()).await.unwrap().unwrap();
+        h.app.on_msg(m);
+        let t = h.app.toast.as_ref().unwrap();
+        (t.text.clone(), t.error)
+    }
+
+    let (text, error) = toast_after_test(&mut h).await;
+    assert!(!error && text.starts_with("connected to it · local · ") && text.ends_with(" ms"), "{text}");
+
+    // a connection that cannot open reports the error instead
+    std::fs::remove_file(&path).unwrap();
+    let (text, error) = toast_after_test(&mut h).await;
+    assert!(error && text.starts_with("could not connect to it · local: "), "{text}");
+}

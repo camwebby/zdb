@@ -40,23 +40,14 @@ pub fn draw(f: &mut Frame, app: &mut App, r: Rect) {
     app.layout.gutter = gutter;
     app.layout.editor = r;
 
-    // keep the cursor visible
+    // show the cursor after it moves; the wheel may have scrolled away from it since
     let tab = &mut app.tabs[app.cur];
     let ed = &mut tab.editor;
-    let (crow, ccol) = ed.cursor();
     let h = text_h as usize;
-    if crow < ed.scroll {
-        ed.scroll = crow;
-    } else if h > 0 && crow >= ed.scroll + h {
-        ed.scroll = crow + 1 - h;
-    }
     let text_w = r.width.saturating_sub(gutter) as usize;
-    let cursor_x: usize = ed.lines[crow].chars().take(ccol).map(|c| c.width().unwrap_or(0)).sum();
-    if cursor_x < ed.hscroll {
-        ed.hscroll = cursor_x.saturating_sub(4);
-    } else if text_w > 1 && cursor_x >= ed.hscroll + text_w - 1 {
-        ed.hscroll = cursor_x + 2 - text_w;
-    }
+    ed.view_rows = h;
+    ed.follow_cursor(h, text_w);
+    let (crow, cursor_x) = (ed.row, ed.cursor_x());
     let ed = &app.tabs[app.cur].editor;
     let (scroll, hscroll) = (ed.scroll, ed.hscroll);
 

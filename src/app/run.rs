@@ -255,6 +255,21 @@ impl App {
         self.load_schema();
     }
 
+    /// Open a throwaway connection to the current environment and report the result in a toast.
+    pub fn test_connection(&mut self) {
+        let label = format!("{} · {}", self.project, self.env);
+        self.with_params(move |app, mut params| {
+            params.read_only = false;
+            app.toast(format!("testing {label}…"));
+            let tx = app.tx.clone();
+            tokio::spawn(async move {
+                let t0 = Instant::now();
+                let res = db::Session::connect(&params).await.map(|s| s.server_version().to_string()).map_err(|e| e.message);
+                let _ = tx.send(Msg::ConnTest { label, res, ms: t0.elapsed().as_millis() as u64 });
+            });
+        });
+    }
+
     pub fn load_schema(&mut self) {
         let key = self.key();
         let Ok(params) = self.connect_params() else { return };
@@ -629,6 +644,10 @@ impl App {
             Msg::Test { res } => {
                 self.test_result = Some(res);
             }
+            Msg::ConnTest { label, res, ms } => match res {
+                Ok(version) => self.toast(format!("connected to {label} · {version} · {ms} ms")),
+                Err(e) => self.toast_err(format!("could not connect to {label}: {e}")),
+            },
         }
     }
 

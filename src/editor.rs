@@ -2,6 +2,7 @@
 //! undo/redo, and an optional Vim layer. Rendering and highlighting live in ui::editor.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use unicode_width::UnicodeWidthChar;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Snapshot {
@@ -34,6 +35,10 @@ pub struct Editor {
     pub anchor: Option<(usize, usize)>,
     pub scroll: usize,
     pub hscroll: usize,
+    /// Rows of text the view shows; the UI keeps this current, and paging goes by it.
+    pub view_rows: usize,
+    /// What `follow_cursor` last scrolled for, so the view only follows when that changes.
+    followed: Option<(usize, usize, u64, usize, usize)>,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     coalesce: bool,
@@ -76,6 +81,8 @@ impl Editor {
             anchor: None,
             scroll: 0,
             hscroll: 0,
+            view_rows: 10,
+            followed: None,
             undo: Vec::new(),
             redo: Vec::new(),
             coalesce: false,
@@ -471,10 +478,161 @@ impl Editor {
         self.doc_end(true);
     }
 
-    pub fn page(&mut self, rows: usize, down: bool) {
+    /// Move the cursor `rows` lines and the view with it, so the cursor keeps its place on
+    /// screen. Paging stops scrolling once the last line is at the bottom.
+    pub fn page(&mut self, rows: usize, down: bool, extend: bool) {
+        let from = self.row;
         for _ in 0..rows {
-            if down { self.down(false) } else { self.up(false) };
+            if down { self.down(extend) } else { self.up(extend) };
         }
+        let moved = self.row.abs_diff(from);
+        self.scroll = if down {
+            let end = self.lines.len().saturating_sub(self.view_rows);
+            (self.scroll + moved).min(end.max(self.scroll))
+        } else {
+            self.scroll.saturating_sub(moved)
+        };
+    }
+
+    /// Rows a page key moves: the view's height less one, so a line of context carries over.
+    fn page_step(&self) -> usize {
+        self.view_rows.saturating_sub(1).max(1)
+    }
+
+    /// Scroll the view (the wheel) without moving the cursor or the selection.
+    pub fn scroll_by(&mut self, delta: isize) {
+        let last = self.lines.len() - 1;
+        self.scroll = (self.scroll as isize + delta).clamp(0, last as isize) as usize;
+    }
+
+    /// Display column of the cursor within its line.
+    pub fn cursor_x(&self) -> usize {
+        self.lines[self.row].chars().take(self.col).map(|c| c.width().unwrap_or(0)).sum()
+    }
+
+    /// Scroll the view just far enough to show the cursor in a `rows` by `width` window. It
+    /// only does so when the cursor, the text or the window changed since the last call, which
+    /// leaves the wheel free to scroll away from the cursor and stay there.
+    pub fn follow_cursor(&mut self, rows: usize, width: usize) {
+        let seen = (self.row, self.col, self.generation, rows, width);
+        if self.followed == Some(seen) {
+            return;
+        }
+        self.followed = Some(seen);
+        if self.row < self.scroll {
+            self.scroll = self.row;
+        } else if rows > 0 && self.row >= self.scroll + rows {
+            self.scroll = self.row + 1 - rows;
+        }
+        let x = self.cursor_x();
+        if x < self.hscroll {
+            self.hscroll = x.saturating_sub(4);
+        } else if width > 1 && x >= self.hscroll + width - 1 {
+            self.hscroll = x + 2 - width;
+        }
+    }
+
+    /// Where a selection that takes in all of `row` ends: the start of the next line, or
+    /// the end of the text on the last line.
+    fn line_end_pos(&self, row: usize) -> (usize, usize) {
+        if row + 1 < self.lines.len() { (row + 1, 0) } else { (row, self.line_len(row)) }
+    }
+
+    /// Select whole lines from `from` to `to`, in either direction.
+    pub fn select_lines(&mut self, from: usize, to: usize) {
+        let last = self.lines.len() - 1;
+        let (from, to) = (from.min(last), to.min(last));
+        if to >= from {
+            self.anchor = Some((from, 0));
+            (self.row, self.col) = self.line_end_pos(to);
+        } else {
+            self.anchor = Some(self.line_end_pos(from));
+            (self.row, self.col) = (to, 0);
+        }
+        self.goal = None;
+    }
+
+    /// Select the cursor's line; when whole lines are already selected, take one more.
+    pub fn select_line(&mut self) {
+        let last = self.lines.len() - 1;
+        let whole = self.selection().filter(|(s, e)| s.1 == 0 && (e.1 == 0 || (e.0 == last && e.1 == self.line_len(last))));
+        match whole {
+            Some((s, e)) if e.1 == 0 => {
+                self.anchor = Some(s);
+                (self.row, self.col) = self.line_end_pos(e.0);
+                self.goal = None;
+            }
+            Some(_) => {}
+            None => self.select_lines(self.row, self.row),
+        }
+    }
+
+    /// Select the word at a position (a click just past a word's end still picks it).
+    pub fn select_word_at(&mut self, row: usize, col: usize) {
+        let row = row.min(self.lines.len() - 1);
+        let chars: Vec<char> = self.lines[row].chars().collect();
+        let col = col.min(chars.len());
+        let on = |i: usize| chars.get(i).is_some_and(|c| is_word(*c));
+        let at = if on(col) { col } else if col > 0 && on(col - 1) { col - 1 } else {
+            self.anchor = None;
+            self.set_cursor(row, col);
+            return;
+        };
+        let mut s = at;
+        while s > 0 && on(s - 1) {
+            s -= 1;
+        }
+        let mut e = at + 1;
+        while on(e) {
+            e += 1;
+        }
+        self.anchor = Some((row, s));
+        (self.row, self.col) = (row, e);
+        self.goal = None;
+    }
+
+    /// Move the cursor, keeping (or starting) a selection from where it was; for shift-click and drag.
+    pub fn drag_to(&mut self, row: usize, col: usize) {
+        if self.anchor.is_none() {
+            self.anchor = Some((self.row, self.col));
+        }
+        self.row = row.min(self.lines.len() - 1);
+        self.col = col.min(self.line_len(self.row));
+        self.goal = None;
+    }
+
+    /// First and last row a line-wise command applies to: the cursor's, or every row the
+    /// selection touches (one ending at column 0 of a later row doesn't take that row).
+    fn covered_rows(&self) -> (usize, usize) {
+        match self.selection() {
+            Some((s, e)) => (s.0, if e.1 == 0 && e.0 > s.0 { e.0 - 1 } else { e.0 }),
+            None => (self.row, self.row),
+        }
+    }
+
+    /// Swap the selected lines (or the cursor's line) with the one above or below.
+    pub fn move_lines(&mut self, down: bool) {
+        let (first, last) = self.covered_rows();
+        if if down { last + 1 >= self.lines.len() } else { first == 0 } {
+            return;
+        }
+        self.snapshot(false);
+        if down {
+            let l = self.lines.remove(last + 1);
+            self.lines.insert(first, l);
+        } else {
+            let l = self.lines.remove(first - 1);
+            self.lines.insert(last, l);
+        }
+        let moved = |p: (usize, usize)| if down { (p.0 + 1, p.1) } else { (p.0 - 1, p.1) };
+        // a selection ending at the start of the next line can land past the last one
+        let clamp = |e: &Editor, p: (usize, usize)| if p.0 >= e.lines.len() { (e.lines.len() - 1, e.line_len(e.lines.len() - 1)) } else { p };
+        (self.row, self.col) = clamp(self, moved((self.row, self.col)));
+        if let Some(a) = self.anchor {
+            self.anchor = Some(clamp(self, moved(a)));
+        }
+        self.goal = None;
+        self.changed();
     }
 
     /// The identifier fragment before the cursor (letters, digits, `_`), and whether a `.` precedes it.
@@ -537,6 +695,7 @@ impl Editor {
             KeyCode::Char(c) if ctrl => match c {
                 'a' => self.home(shift),
                 'e' => self.end(shift),
+                'l' => self.select_line(),
                 'z' if shift => self.redo(),
                 'z' => self.undo(),
                 'y' => self.redo(),
@@ -577,6 +736,8 @@ impl Editor {
             KeyCode::Right if super_ => self.end(shift),
             KeyCode::Up if super_ => self.doc_start(shift),
             KeyCode::Down if super_ => self.doc_end(shift),
+            KeyCode::Up if alt && shift => self.move_lines(false),
+            KeyCode::Down if alt && shift => self.move_lines(true),
             KeyCode::Left if alt || ctrl => self.word_left(shift),
             KeyCode::Right if alt || ctrl => self.word_right(shift),
             KeyCode::Left => self.left(shift),
@@ -591,8 +752,8 @@ impl Editor {
             KeyCode::End if ctrl => self.doc_end(shift),
             KeyCode::Home => self.home(shift),
             KeyCode::End => self.end(shift),
-            KeyCode::PageUp => self.page(10, false),
-            KeyCode::PageDown => self.page(10, true),
+            KeyCode::PageUp => self.page(self.page_step(), false, shift),
+            KeyCode::PageDown => self.page(self.page_step(), true, shift),
             KeyCode::Tab => self.insert_str("    "),
             KeyCode::BackTab => {
                 let lead = self.lines[self.row].chars().take_while(|c| *c == ' ').count().min(4);
@@ -653,11 +814,11 @@ impl Editor {
         if ctrl {
             return match c {
                 'd' => {
-                    self.page(10, true);
+                    self.page((self.view_rows / 2).max(1), true, false);
                     Outcome::Handled
                 }
                 'u' => {
-                    self.page(10, false);
+                    self.page((self.view_rows / 2).max(1), false, false);
                     Outcome::Handled
                 }
                 _ => Outcome::NotHandled,
@@ -1033,6 +1194,128 @@ mod tests {
         let mut e = Editor::new("select o.");
         e.set_cursor(0, 9);
         assert_eq!(e.word_before_cursor(), (String::new(), Some("o".into())));
+    }
+
+    #[test]
+    fn select_line_extends_by_line() {
+        let mut e = Editor::new("one\ntwo\nthree");
+        e.set_cursor(1, 2);
+        e.select_line();
+        assert_eq!(e.selected_text().as_deref(), Some("two\n"));
+        e.select_line();
+        assert_eq!(e.selected_text().as_deref(), Some("two\nthree"));
+        e.select_line();
+        assert_eq!(e.selected_text().as_deref(), Some("two\nthree"));
+        e.delete_selection();
+        assert_eq!(e.text(), "one\n");
+        // a partial selection restarts from the cursor's line
+        let mut e = Editor::new("one\ntwo");
+        e.set_cursor(0, 1);
+        e.right(true);
+        e.select_line();
+        assert_eq!(e.selected_text().as_deref(), Some("one\n"));
+    }
+
+    #[test]
+    fn select_lines_both_directions_and_words() {
+        let mut e = Editor::new("a\nbb\nccc\ndd");
+        e.select_lines(1, 2);
+        assert_eq!(e.selected_text().as_deref(), Some("bb\nccc\n"));
+        e.select_lines(2, 0);
+        assert_eq!(e.selected_text().as_deref(), Some("a\nbb\nccc\n"));
+        e.select_lines(3, 3);
+        assert_eq!(e.selected_text().as_deref(), Some("dd"));
+        let mut e = Editor::new("select foo_bar, x");
+        e.select_word_at(0, 10);
+        assert_eq!(e.selected_text().as_deref(), Some("foo_bar"));
+        e.select_word_at(0, 14);
+        assert_eq!(e.selected_text().as_deref(), Some("foo_bar"), "just past the end still picks the word");
+        e.select_word_at(0, 15);
+        assert_eq!(e.selection(), None, "whitespace selects nothing");
+        e.set_cursor(0, 2);
+        e.drag_to(0, 6);
+        assert_eq!(e.selected_text().as_deref(), Some("lect"));
+        e.drag_to(0, 0);
+        assert_eq!(e.selected_text().as_deref(), Some("se"));
+    }
+
+    #[test]
+    fn move_lines_keeps_selection() {
+        let alt_shift = KeyModifiers::ALT | KeyModifiers::SHIFT;
+        let mut e = Editor::new("a\nb\nc\nd");
+        e.set_cursor(1, 1);
+        e.handle_key(KeyEvent::new(KeyCode::Down, alt_shift));
+        assert_eq!(e.text(), "a\nc\nb\nd");
+        assert_eq!(e.cursor(), (2, 1));
+        e.handle_key(KeyEvent::new(KeyCode::Up, alt_shift));
+        e.handle_key(KeyEvent::new(KeyCode::Up, alt_shift));
+        assert_eq!(e.text(), "b\na\nc\nd");
+        e.handle_key(KeyEvent::new(KeyCode::Up, alt_shift));
+        assert_eq!(e.text(), "b\na\nc\nd", "stops at the top");
+        e.undo();
+        assert_eq!(e.text(), "a\nb\nc\nd");
+        // a whole-line selection moves as a block and stays selected
+        let mut e = Editor::new("a\nb\nc\nd");
+        e.select_lines(1, 2);
+        e.move_lines(true);
+        assert_eq!(e.text(), "a\nd\nb\nc");
+        assert_eq!(e.selected_text().as_deref(), Some("b\nc"));
+        e.move_lines(false);
+        assert_eq!(e.text(), "a\nb\nc\nd");
+        assert_eq!(e.selected_text().as_deref(), Some("b\nc"), "still the same two lines");
+        e.move_lines(true);
+        e.move_lines(true);
+        assert_eq!(e.text(), "a\nd\nb\nc", "stops at the bottom");
+    }
+
+    #[test]
+    fn paging_extends_selection() {
+        let mut e = Editor::new(&"x\n".repeat(40));
+        e.view_rows = 16;
+        e.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!((e.cursor(), e.selection()), ((15, 0), None));
+        e.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::SHIFT));
+        assert_eq!(e.cursor(), (30, 0));
+        assert_eq!(e.selection(), Some(((15, 0), (30, 0))));
+        e.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::SHIFT));
+        assert_eq!(e.selection(), None);
+    }
+
+    #[test]
+    fn view_follows_the_cursor_only_when_it_moves() {
+        let mut e = Editor::new(&"x\n".repeat(40));
+        e.follow_cursor(10, 40);
+        e.scroll_by(5);
+        e.follow_cursor(10, 40);
+        assert_eq!((e.scroll, e.cursor()), (5, (0, 0)), "scrolling away from the cursor sticks");
+        e.down(false);
+        e.follow_cursor(10, 40);
+        assert_eq!(e.scroll, 1, "moving it brings the view back, by the least it takes");
+        e.set_cursor(20, 0);
+        e.follow_cursor(10, 40);
+        assert_eq!(e.scroll, 11);
+        e.scroll_by(-100);
+        assert_eq!(e.scroll, 0);
+        e.scroll_by(100);
+        assert_eq!(e.scroll, 40, "the wheel stops at the last line");
+        e.follow_cursor(10, 20);
+        assert_eq!(e.scroll, 20, "resizing the view shows the cursor again, on the top row");
+    }
+
+    #[test]
+    fn paging_keeps_the_cursor_on_its_screen_row() {
+        let mut e = Editor::new(&"x\n".repeat(60));
+        e.view_rows = 10;
+        e.set_cursor(3, 0);
+        let page = |e: &mut Editor, k| e.handle_key(KeyEvent::new(k, KeyModifiers::NONE));
+        page(&mut e, KeyCode::PageDown);
+        assert_eq!((e.scroll, e.row), (9, 12), "one line of overlap, cursor still on the 4th row");
+        page(&mut e, KeyCode::PageUp);
+        assert_eq!((e.scroll, e.row), (0, 3));
+        e.set_cursor(58, 0);
+        e.scroll = 51;
+        page(&mut e, KeyCode::PageDown);
+        assert_eq!((e.scroll, e.row), (51, 60), "stops with the last line at the bottom");
     }
 
     #[test]

@@ -189,6 +189,18 @@ Press `^B` for a sidebar of tables and saved queries. Press `⏎` on a row to op
 
 In the editor, `^A`/`^E` (what Cmd+←/→ sends on macOS) jump to line start and end. Use `^E` from the results, or `^K`, to switch environment.
 
+Selecting in the editor:
+
+| Key | Action |
+|---|---|
+| `⇧`+arrows, `⇧PgUp`/`⇧PgDn` | Extend the selection by a character, line, or screen (`PgUp`/`PgDn` scroll a screen and keep the cursor on its row) |
+| `^L` | Select the current line; press again to take the next one |
+| `M-⇧↑` / `M-⇧↓` | Move the selected lines (or the current one) up / down |
+| Drag, `⇧`-click | Select text, or extend the selection to the click; holding a drag above or below the editor keeps scrolling |
+| Mouse wheel | Scroll the editor without moving the cursor or selection; typing or moving the cursor brings the view back |
+| Double-click / triple-click | Select a word / a line |
+| Click or drag the line numbers | Select whole lines |
+
 ## ⚙️ Configuration
 
 Lives in `$XDG_CONFIG_HOME/zdb` (or `~/.config/zdb`; override with `ZDB_CONFIG_DIR`).
